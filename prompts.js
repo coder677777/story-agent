@@ -201,9 +201,8 @@ function compact(s) {
 
 // ---------- video: voice + pictures
 // How the narrator should sound. Gemini's voices follow plain-English directions.
-export const VOICE_STYLE = "Read this like a kid of about 12 telling a true story that still hurts a little. " +
-  "Quiet, natural and close to the mic. Short pause after every full stop, a longer pause between paragraphs. " +
-  "Deadpan on the jokes. Slower and softer near the end.";
+// How the narrator should sound. Sent separately from the words, so it is never read out loud. Keep it short.
+export const VOICE_STYLE = "quiet and emotional, like a 12-year-old telling a true story, natural pauses, softer near the end";
 
 // Gemini voices that suit young storytelling (name: description)
 export const VOICES = {

@@ -1,8 +1,9 @@
 // Story Agent: Video Studio. Turns a script into a vertical video right in the browser:
 // a plan for the pictures, a voiceover (free Gemini voice), pictures (AI, your own, or text cards),
 // timing, an animated preview, and an MP4 export. Every step shows live progress and logs what happened.
-import { VOICES, VOICE_STYLE, ART_STYLE, artPlanPrompt, clipPrompt, directorPrompt, shotPrompt } from "./prompts.js?v=1.5";
-import { createStage, VOCAB, normalizeDirection } from "./anim3d.js?v=1.5";
+import { VOICES, VOICE_STYLE, ART_STYLE, artPlanPrompt, clipPrompt, directorPrompt, shotPrompt } from "./prompts.js?v=1.6";
+import { createStage, VOCAB, normalizeDirection } from "./anim3d.js?v=1.6";
+import { alignVoice } from "./align.js?v=1.6";
 
 export function setupVideo(ctx) {
   const { $, $$, LS, log, copy, toast, esc, ask, cfg, GBASE, report, sleep, fmt, Cancelled, openScript } = ctx;
@@ -42,7 +43,7 @@ export function setupVideo(ctx) {
             <button class="btn small" id="vVoiceUp">⬆ Use my own recording</button>
           </div>
           <p class="label" style="margin-top:14px">How it should sound</p>
-          <textarea id="vVoiceStyle" style="min-height:70px"></textarea>
+          <input class="text" id="vVoiceStyle" maxlength="200" placeholder="e.g. quiet, emotional, like a kid telling a true story">
           <p class="hint">Free with your Gemini key: about 10 voices a day. Each video uses 1.</p>
 
           <p class="label" style="margin-top:16px">Pictures</p>
@@ -226,6 +227,7 @@ export function setupVideo(ctx) {
     $("#vPart").textContent = "PART " + script.part;
     $("#vTitle").textContent = script.title;
     $("#vVoice").value = vs.voice;
+    if (!vs.voiceStyle || /^Read this like a kid/.test(vs.voiceStyle)) { vs.voiceStyle = VOICE_STYLE; save(); }
     $("#vVoiceStyle").value = vs.voiceStyle;
     setSeg("vPics", vs.pics); setSeg("vMusic", vs.music); setSeg("vQual", vs.quality); setSeg("vClipRes", vs.clipRes); setSeg("vFps", vs.fps || 60);
     picsHint(); vErr(""); $("#vOut").innerHTML = ""; $("#vExportHint").textContent = "";
@@ -237,6 +239,11 @@ export function setupVideo(ctx) {
     await loadMedia();
     const vb = await get(key("voice"));
     if (vb) { try { voiceBuf = await decode(vb); } catch { vs.voiceSrc = null; } }
+    if (voiceBuf && vs.voiceSrc && vs.voiceSrc !== "your recording" && !vs.voiceV) {
+      vlog("This voice was recorded the old way (the style instructions got read out loud at the start). It will be re-recorded when you press Make the video.", true);
+      await del(key("voice")); voiceBuf = null; vs.voiceSrc = null; vs.timing = null; save();
+    }
+    if (voiceBuf && vs.timing && !vs.timing.scenes.some((s) => s.caps)) { vlog("Re-lining up the captions with the voice (new, more accurate timing)"); await computeTiming(); }
     const mb = await get("music:file"); musicBuf = null;
     if (mb) { try { musicBuf = await decode(mb); } catch {} }
     refreshSteps();
@@ -454,32 +461,60 @@ export function setupVideo(ctx) {
   }
 
   // ---------- voice: one request for the whole voiceover (the free tier allows ~10 a day)
+  // Only the script's own words are sent as text, so nothing else gets read out loud.
+  // Newer voice models (Gemini 3.8+) take the delivery style in a separate field; older ones get a short "Say ...:" lead-in.
+  const isNewTTS = (m) => /gemini-(3\.[5-9]|[4-9])/.test(m);
+  function voiceBodies(m, scenesText, style) {
+    if (!isNewTTS(m)) {
+      const text = scenesText.join("\n\n");
+      return [{ kind: "gc", body: { contents: [{ role: "user", parts: [{ text: style ? `Say in a ${style} voice:\n\n${text}` : text }] }],
+        generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: vs.voice } } } } } }];
+    }
+    const text = scenesText.join(" <short pause>\n\n");
+    const mk = (annotations) => ({ kind: "ia", body: { model: m, input: [{ type: "user_input", content: [{ type: "text", text, ...(annotations ? { annotations } : {}) }] }],
+      response_format: { type: "audio" }, generation_config: { speech_config: [{ voice: vs.voice }] }, store: false } });
+    return style
+      ? [mk([{ speech_metadata: { style } }]), mk([{ type: "speech_metadata", speech_metadata: { style } }]), mk([{ type: "speech_metadata", style }]), mk(null)]
+      : [mk(null)];
+  }
+  function audioFrom(kind, json) {
+    if (kind === "ia") {
+      const part = (json?.steps || []).filter((s) => s.type === "model_output").flatMap((s) => s.content || []).find((c) => c.type === "audio" && c.data);
+      return part ? { data: part.data, mime: part.mime_type || "audio/wav" } : null;
+    }
+    const p = json?.candidates?.[0]?.content?.parts?.find((x) => x.inlineData?.data);
+    return p ? { data: p.inlineData.data, mime: p.inlineData.mimeType || "" } : null;
+  }
   async function makeVoice() {
-    const text = cur.scenes.map((x) => (x.vo || "").trim()).filter(Boolean).join("\n\n");
-    if (!text) throw new Error("This script has no voiceover lines.");
-    const body = {
-      contents: [{ role: "user", parts: [{ text: `${vs.voiceStyle}\n\nRead this aloud:\n\n${text}` }] }],
-      generationConfig: { responseModalities: ["AUDIO"], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: vs.voice } } } },
-    };
+    const scenesText = cur.scenes.map((x) => (x.vo || "").trim()).filter(Boolean);
+    if (!scenesText.length) throw new Error("This script has no voiceover lines.");
+    const words = scenesText.join(" ").split(/\s+/).length;
+    const style = (vs.voiceStyle || "").trim().slice(0, 200);
     const order = await ttsModels();
     vlog(`Voice models to try: ${order.join(", ")}`);
     let usedUp = [];
     for (const m of order) {
-      for (let attempt = 1; attempt <= 3; attempt++) {
+      const bodies = voiceBodies(m, scenesText, style);
+      let bi = 0;
+      for (let attempt = 1; attempt <= 4 && bi < bodies.length; attempt++) {
         if (run.cancelled) throw new Cancelled();
-        vstep("voice", "on", `Google is recording ${text.split(/\s+/).length} words with ${vs.voice} (${m}). Usually 15–60s`);
-        vlog(`Recording the voice with ${m}, voice ${vs.voice}${attempt > 1 ? ` (try ${attempt})` : ""}`);
-        const r = await call(m, body, 180e3);
+        const { kind, body } = bodies[bi];
+        vstep("voice", "on", `Google is recording ${words} words with ${vs.voice} (${m}). Usually 15–60s`);
+        vlog(`Recording the voice with ${m}, voice ${vs.voice}${kind === "ia" ? `, style in its own field${bi ? ` (format ${bi + 1})` : ""}` : ""}${attempt > 1 ? ` (try ${attempt})` : ""}`);
+        let r;
+        if (kind === "ia") {
+          try { const res = await post("interactions", body, 180e3); const text = await res.text(); let json = null; try { json = JSON.parse(text); } catch {} r = { ok: res.ok, status: res.status, text, json }; }
+          catch (e) { if (e instanceof Cancelled) throw e; r = { ok: false, status: /longer than/.test(e.message) ? "timeout" : "network", text: "" }; }
+        } else r = await call(m, body, 180e3);
         if (r.ok) {
-          const part = r.json?.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
-          if (!part) { vlog(`${m} answered without audio: ${short(r.text)}`, true); break; }
-          const mime = part.inlineData.mimeType || "";
+          const a = audioFrom(kind, r.json);
+          if (!a) { vlog(`${m} answered without audio: ${short(r.text)}`, true); break; }
           let blob;
-          if (/wav|mpeg|mp3|ogg/.test(mime)) blob = new Blob([fromB64(part.inlineData.data)], { type: mime });
-          else blob = pcmToWav(fromB64(part.inlineData.data), parseInt((mime.match(/rate=(\d+)/) || [])[1] || "24000", 10));
+          if (/wav|mpeg|mp3|ogg/.test(a.mime)) blob = new Blob([fromB64(a.data)], { type: a.mime });
+          else blob = pcmToWav(fromB64(a.data), parseInt((a.mime.match(/rate=(\d+)/) || [])[1] || "24000", 10));
           voiceBuf = await decode(blob);
           await put(key("voice"), blob);
-          vs.voiceSrc = `${vs.voice} · ${m}`; vs.timing = null; save();
+          vs.voiceSrc = `${vs.voice} · ${m}`; vs.voiceV = 2; vs.timing = null; save();
           vlog(`Voice done: ${fmt(voiceBuf.duration * 1000)} long (${(blob.size / 1e6).toFixed(1)} MB)`);
           vstep("voice", "done", `${fmt(voiceBuf.duration * 1000)} · ${vs.voiceSrc}`);
           return;
@@ -489,6 +524,7 @@ export function setupVideo(ctx) {
         if (r.status === "network") { vlog("Couldn't reach Google", true); if (attempt >= 2) throw new Error("Couldn't reach Google. Check your internet and press Make the video again."); await sleep(3000); continue; }
         vlog(`${m}: HTTP ${r.status} ${short(r.text)}`, true);
         if (r.status === 429) { if (isDaily(low) || attempt >= 2) { usedUp.push(m); break; } await waitRetry(r.text, "voice", m); continue; }
+        if (r.status === 400 && kind === "ia" && /annotation|speech_metadata|unknown name|invalid json|cannot find field|unknown field/.test(low) && bi < bodies.length - 1) { bi++; attempt--; continue; }
         if (r.status === 404 || (r.status === 400 && /not found|not supported|unsupported|no longer|voice/.test(low) && !/api key/.test(low))) break;
         if ([400, 401, 403].includes(r.status) && /api key|api_key|permission/.test(low)) throw new Error("Google rejected your key. Check it in Settings.");
         if (r.status >= 500) { await sleep(4000 * attempt); continue; }
@@ -681,51 +717,17 @@ export function setupVideo(ctx) {
   // ---------- timing: split the voice at its natural pauses so each scene gets its own lines
   async function computeTiming() {
     if (!voiceBuf) return;
-    vstep("timing", "on", "Finding the pauses in the voice…");
-    const ch = voiceBuf.getChannelData(0), sr = voiceBuf.sampleRate, win = Math.round(sr * 0.02);
-    const rms = [];
-    for (let i = 0; i + win <= ch.length; i += win) { let s = 0; for (let j = i; j < i + win; j++) s += ch[j] * ch[j]; rms.push(Math.sqrt(s / win)); }
-    const sorted = [...rms].sort((a, b) => a - b);
-    const floor = sorted[Math.floor(sorted.length * 0.15)] || 0, peak = sorted[Math.floor(sorted.length * 0.95)] || 1;
-    const thr = floor + (peak - floor) * 0.08;
-    const loud = rms.map((v) => v > thr);
-    const first = Math.max(0, loud.indexOf(true)) * 0.02;
-    const last = (loud.length - 1 - [...loud].reverse().indexOf(true)) * 0.02 + 0.02;
-    const gaps = [];
-    for (let i = 0; i < loud.length;) {
-      if (loud[i]) { i++; continue; }
-      let j = i; while (j < loud.length && !loud[j]) j++;
-      if (j - i >= 9) gaps.push({ c: ((i + j) / 2) * 0.02, len: (j - i) * 0.02 });
-      i = j;
-    }
-    const sc = cur.scenes.map((s) => ({ w: (s.vo || "").trim() ? Math.max((s.vo || "").trim().length, 12) : 0 }));
-    const totalW = sc.reduce((a, s) => a + s.w, 0) || 1;
-    const span = last - first;
-    const bounds = [Math.max(0, first - 0.08)];
-    let acc = 0;
-    const voIdx = sc.map((s, i) => (s.w ? i : -1)).filter((i) => i >= 0);
-    voIdx.forEach((i, n) => {
-      acc += sc[i].w;
-      if (n === voIdx.length - 1) { bounds.push(Math.min(voiceBuf.duration, last + 0.2)); return; }
-      const target = first + span * (acc / totalW);
-      const prev = bounds[bounds.length - 1];
-      let best = null;
-      for (const g of gaps) { if (g.c <= prev + 0.5 || Math.abs(g.c - target) > 2.2) continue; const score = Math.abs(g.c - target) - g.len * 0.6; if (!best || score < best.score) best = { c: g.c, score }; }
-      bounds.push(best ? best.c : Math.max(target, prev + 0.5));
-    });
-    let t = 0.25, k = 0;
-    const scenes = cur.scenes.map((s, i) => {
-      let o;
-      if (sc[i].w) { const a0 = bounds[k], a1 = bounds[k + 1]; k++; o = { start: t, dur: a1 - a0, a0, a1 }; }
-      else o = { start: t, dur: 1.4, a0: null, a1: null };
-      t += o.dur; return o;
-    });
-    const END = 3.2;
-    vs.timing = { scenes, endStart: t, total: t + END };
+    vstep("timing", "on", "Matching every sentence to the voice…");
+    await sleep(20);
+    let ch = voiceBuf.getChannelData(0);
+    if (voiceBuf.numberOfChannels > 1) { const r = voiceBuf.getChannelData(1); ch = ch.map((x, i) => (x + r[i]) / 2); }
+    const A = alignVoice(ch, voiceBuf.sampleRate, cur.scenes);
+    if (!A) throw new Error("This script has no voiceover lines to line up.");
+    vs.timing = { scenes: A.scenes, endStart: A.endStart, total: A.total };
     save();
-    vlog(`Timing: ${scenes.length} scenes, ${gaps.length} pauses found, video ${fmt(vs.timing.total * 1000)}`);
+    vlog(`Timing: ${A.scenes.length} scenes, ${A.pauses} pauses in the voice, ${A.matched} of ${A.boundaries} sentence breaks matched, video ${fmt(A.total * 1000)}`);
+    vstep("timing", "done", `${fmt(A.total * 1000)} total, captions matched to the voice`);
     picsHint();
-    vstep("timing", "done", `${fmt(vs.timing.total * 1000)} total`);
   }
 
   // ---------- drawing
@@ -829,12 +831,14 @@ export function setupVideo(ctx) {
       }
       if (has(s, IMPACT) && local < 0.16) { g.fillStyle = `rgba(255,255,255,${0.55 * (1 - local / 0.16)})`; g.fillRect(0, 0, W, H); }
       if (s.text) { const pop = Math.min(1, local / 0.18); bigText(s.text, H * 0.2, W * 0.115, 900, "#FFE500", 0.7 + 0.3 * ease(pop)); }
-      const cs = chunks(s.vo);
-      if (cs.length) {
-        const lens = cs.map((c) => c.length + 4), tot = lens.reduce((a, b) => a + b, 0);
-        let acc = 0, k = 0; const q = p * tot; while (k < cs.length - 1 && acc + lens[k] < q) { acc += lens[k]; k++; }
-        const card = !media[i];
-        bigText(cs[k], card ? H * 0.5 : H * 0.7, card ? W * 0.1 : W * 0.078, card ? 900 : 800, "#fff");
+      // captions follow the actual spoken words (times come from lining up the voice)
+      const caps = sc.caps || [];
+      let cap = null;
+      for (let k = 0; k < caps.length; k++) { if (local >= caps[k].t0 - 0.05) cap = caps[k]; else break; }
+      if (cap && local > cap.t1 + 0.6 && cap === caps[caps.length - 1]) cap = null;
+      if (cap) {
+        const card = !media[i], pop = Math.min(1, (local - cap.t0 + 0.05) / 0.12);
+        bigText(cap.text, card ? H * 0.5 : H * 0.7, card ? W * 0.1 : W * 0.078, card ? 900 : 800, "#fff", 0.9 + 0.1 * ease(Math.max(0, pop)));
       }
     } else {
       const e = Math.min(1, (t - tm.endStart) / 0.5);

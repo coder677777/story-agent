@@ -1,7 +1,7 @@
 import {
   STYLES, TWEAKS, ideasPrompt, ideasFromPromptPrompt, scriptPrompt, nextPartPrompt, tweakPrompt,
-} from "./prompts.js?v=1.5";
-import { setupVideo } from "./video.js?v=1.5";
+} from "./prompts.js?v=1.6";
+import { setupVideo } from "./video.js?v=1.6";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -80,7 +80,7 @@ class KeyError extends Error { constructor() { super("Gemini rejected the API ke
 class QuotaError extends Error {}
 
 // ---------- activity log (saved in this browser so you can copy it for Claude)
-const VERSION = "1.5";
+const VERSION = "1.6";
 const LOG = LS.get("log", []);
 function log(msg, bad = false) {
   const line = `${new Date().toLocaleTimeString()}  ${bad ? "✗ " : ""}${msg}`;
