@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Story Agent</title>
+<meta name="theme-color" content="#16171C">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+@font-face { font-family: "Poppins"; font-weight: 800; src: url(fonts/Poppins-ExtraBold.ttf) format("truetype"); font-display: swap; }
+@font-face { font-family: "Poppins"; font-weight: 900; src: url(fonts/Poppins-Black.ttf) format("truetype"); font-display: swap; }
+
+:root {
+  --bg: #16171C;
+  --panel: #21232B;
+  --panel-2: #2A2D37;
+  --line: #333744;
+  --text: #F2F3F5;
+  --muted: #9AA0AD;
+  --hl: #FFE500;
+  --red: #FF2D55;
+  --ok: #3DDC84;
+  --display: "Poppins", "Segoe UI", system-ui, sans-serif;
+  --body: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 var(--body); -webkit-font-smoothing: antialiased; }
+button, input, select, textarea { font: inherit; color: inherit; }
+a { color: inherit; }
+:focus-visible { outline: 2px solid var(--hl); outline-offset: 2px; border-radius: 6px; }
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+
+/* top bar */
+header.top { display: flex; align-items: center; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: rgba(22,23,28,.92); backdrop-filter: blur(8px); z-index: 20; }
+.brand { display: flex; align-items: center; gap: 10px; text-decoration: none; font-family: var(--display); font-weight: 900; font-size: 19px; cursor: pointer; background: none; border: 0; padding: 0; }
+header.top nav { margin-left: auto; display: flex; gap: 4px; }
+.btn { border: 1px solid var(--line); background: var(--panel); padding: 9px 15px; border-radius: 10px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px; text-decoration: none; white-space: nowrap; }
+.btn:hover { background: var(--panel-2); }
+.btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.btn.ghost:hover, .btn.ghost.on { color: var(--text); background: var(--panel); }
+.btn.primary { background: var(--hl); color: #15161A; border-color: var(--hl); font-weight: 700; }
+.btn.primary:hover { filter: brightness(1.06); }
+.btn:disabled { opacity: .45; cursor: not-allowed; filter: none; }
+.btn.small { padding: 5px 11px; font-size: 13px; border-radius: 8px; }
+.btn.danger { color: #FF8A9F; }
+.count { background: var(--panel-2); border-radius: 99px; padding: 0 7px; font-size: 12px; color: var(--muted); }
+
+main { max-width: 1040px; margin: 0 auto; padding: 0 24px 120px; }
+
+/* home */
+.hero { padding: 56px 0 24px; }
+.hero h1 { font-family: var(--display); font-weight: 900; font-size: clamp(34px, 6vw, 64px); line-height: 1.03; letter-spacing: -.025em; margin: 0 0 14px; max-width: 15ch; }
+.hero h1 em { font-style: normal; color: var(--hl); }
+.hero p { color: var(--muted); font-size: 17px; max-width: 56ch; margin: 0; }
+
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 30px; }
+.mode { text-align: left; background: var(--panel); border: 2px solid var(--line); border-radius: 16px; padding: 18px 20px; cursor: pointer; }
+.mode:hover { border-color: #4A4F5E; }
+.mode.on { border-color: var(--hl); }
+.mode b { font-family: var(--display); font-weight: 800; font-size: 19px; display: flex; align-items: center; gap: 10px; }
+.mode span { color: var(--muted); font-size: 14px; display: block; margin-top: 4px; }
+.mode .num { width: 26px; height: 26px; border-radius: 50%; background: var(--panel-2); display: grid; place-items: center; font-size: 13px; }
+.mode.on .num { background: var(--hl); color: #15161A; }
+
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 22px; margin-top: 14px; }
+.label { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); font-weight: 700; margin: 0 0 8px; }
+.field { margin-bottom: 18px; }
+.styles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.style { text-align: left; background: var(--bg); border: 1.5px solid var(--line); border-radius: 12px; padding: 12px 14px; cursor: pointer; }
+.style.on { border-color: var(--hl); background: #1E1F17; }
+.style b { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-weight: 700; }
+.style i { font-style: normal; font-size: 11px; padding: 1px 8px; border-radius: 99px; background: var(--panel-2); color: var(--muted); font-weight: 600; }
+.style.on i { background: var(--hl); color: #15161A; }
+.style span { display: block; font-size: 13px; color: var(--muted); margin-top: 4px; line-height: 1.4; }
+.row { display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-end; }
+.seg { display: inline-flex; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
+.seg button { border: 0; background: none; padding: 6px 14px; border-radius: 999px; cursor: pointer; color: var(--muted); }
+.seg button.on { background: var(--panel-2); color: var(--text); font-weight: 600; }
+input.text, textarea { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+textarea { min-height: 120px; resize: vertical; line-height: 1.5; }
+input.text:focus, textarea:focus { border-color: #4A4F5E; outline: none; }
+.go { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; }
+.go .btn { padding: 13px 22px; font-size: 16px; }
+.hint { font-size: 13px; color: var(--muted); margin-top: 8px; }
+
+/* ideas */
+.section-h { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 40px 0 4px; }
+.section-h h2 { font-family: var(--display); font-weight: 800; font-size: 22px; margin: 0; }
+.ideas { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; margin-top: 14px; }
+.idea { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+.idea h3 { font-family: var(--display); font-weight: 800; font-size: 19px; margin: 0; }
+.idea .hook { font-size: 16px; font-weight: 600; line-height: 1.4; border-left: 3px solid var(--hl); padding-left: 10px; }
+.idea p { margin: 0; color: #C9CDD6; font-size: 14px; }
+.idea .meta { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill { font-size: 12px; padding: 2px 9px; border-radius: 99px; background: var(--panel-2); color: var(--muted); }
+.pill.red { background: var(--red); color: #fff; font-weight: 700; }
+.pill.yellow { background: var(--hl); color: #15161A; font-weight: 700; }
+details.spoil { background: var(--bg); border-radius: 10px; padding: 8px 12px; font-size: 14px; }
+details.spoil summary { cursor: pointer; color: var(--muted); font-weight: 600; }
+details.spoil div { margin-top: 6px; color: #C9CDD6; }
+.idea .btn.primary { margin-top: auto; }
+
+/* script */
+.back { margin-top: 22px; }
+.shead { display: grid; grid-template-columns: 1fr auto; gap: 28px; margin-top: 18px; align-items: start; }
+.shead h1 { font-family: var(--display); font-weight: 900; font-size: clamp(28px, 4.4vw, 44px); line-height: 1.05; margin: 8px 0 10px; letter-spacing: -.02em; }
+.shead .hookline { font-size: 18px; font-weight: 600; border-left: 3px solid var(--hl); padding-left: 12px; max-width: 60ch; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 18px; }
+.cover { width: 168px; aspect-ratio: 9/16; border-radius: 14px; position: relative; overflow: hidden; flex: none;
+  background: radial-gradient(120% 70% at 50% 100%, #3B4A7A 0%, #1E2540 55%, #0E1020 100%); border: 1px solid var(--line); }
+.cover .t1 { position: absolute; top: 15%; left: 8px; right: 8px; text-align: center; font-family: var(--display); font-weight: 900; font-size: 19px; line-height: 1.08; color: #fff; text-shadow: 0 2px 6px rgba(0,0,0,.6); }
+.cover .t2 { display: block; font-size: 11px; font-weight: 800; margin-top: 6px; }
+.cover .fig { position: absolute; bottom: 12%; left: 50%; transform: translateX(-50%); width: 46px; height: 74px; }
+.cover .fig::before { content: ""; position: absolute; top: 0; left: 6px; width: 34px; height: 30px; background: #F4C99B; border-radius: 4px; }
+.cover .fig::after { content: ""; position: absolute; top: 32px; left: 0; width: 46px; height: 42px; background: var(--hl); border-radius: 4px; }
+.cover small { position: absolute; bottom: 6px; left: 0; right: 0; text-align: center; font-size: 10px; color: rgba(255,255,255,.5); }
+
+.tweaks { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.tweaks .custom { display: flex; gap: 8px; flex: 1 1 320px; }
+.tweaks .custom input { flex: 1; min-width: 0; padding: 7px 12px; border-radius: 8px; }
+
+.scenes { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.scene { display: grid; grid-template-columns: 92px 1fr; gap: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; }
+.scene.has-clue { border-color: rgba(255,229,0,.45); }
+.scene .time { font-family: var(--display); font-weight: 800; font-size: 14px; color: var(--hl); padding-top: 2px; }
+.scene .vo { font-size: 17px; font-weight: 600; line-height: 1.45; }
+.scene .vo::before { content: "VO  "; font-size: 11px; color: var(--muted); font-weight: 700; letter-spacing: .06em; }
+.scene dl { display: grid; grid-template-columns: 74px 1fr; gap: 3px 10px; margin: 10px 0 0; font-size: 14px; }
+.scene dt { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .05em; padding-top: 2px; }
+.scene dd { margin: 0; color: #C9CDD6; }
+.scene dd.clue { color: var(--hl); }
+.scene dd.ost { font-family: var(--display); font-weight: 800; color: #fff; }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; }
+.box h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.box p { margin: 0; white-space: pre-wrap; }
+.box ul { margin: 0; padding-left: 18px; }
+.box li { margin-bottom: 6px; }
+.box li b { color: var(--hl); }
+.big { font-family: var(--display); font-weight: 800; font-size: 20px; line-height: 1.25; }
+
+/* library */
+.lib { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+.libitem { display: flex; gap: 14px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; cursor: pointer; }
+.libitem:hover { border-color: #4A4F5E; }
+.libitem .grow { flex: 1; min-width: 0; }
+.libitem b { font-family: var(--display); font-weight: 800; font-size: 17px; }
+.libitem .sub { color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.empty { text-align: center; padding: 60px 20px; color: var(--muted); }
+
+/* modal + loading */
+.veil { position: fixed; inset: 0; background: rgba(10,11,14,.72); backdrop-filter: blur(4px); z-index: 50; display: grid; place-items: center; padding: 20px; }
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 24px; width: min(560px, 100%); max-height: 92vh; overflow: auto; }
+.modal h2 { font-family: var(--display); font-weight: 800; font-size: 22px; margin: 0 0 6px; }
+.modal ol { padding-left: 20px; color: #C9CDD6; }
+.modal li { margin-bottom: 6px; }
+.modal .foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; flex-wrap: wrap; }
+.status { font-size: 14px; margin-top: 8px; min-height: 20px; }
+.status.ok { color: var(--ok); }
+.status.bad { color: #FF8A9F; }
+.loading { text-align: center; }
+.spinner { width: 46px; height: 46px; border-radius: 50%; border: 4px solid var(--panel-2); border-top-color: var(--hl); margin: 8px auto 18px; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading h2 { font-family: var(--display); font-weight: 800; font-size: 20px; margin: 0; }
+.loading p { color: var(--muted); margin: 6px 0 0; min-height: 24px; }
+.toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--text); color: #15161A; padding: 10px 18px; border-radius: 99px; font-weight: 600; z-index: 60; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+.err { background: #3A1E25; border: 1px solid #6B2B3A; color: #FFC2CE; border-radius: 12px; padding: 12px 14px; margin-top: 14px; white-space: pre-wrap; }
+
+@media (max-width: 720px) {
+  header.top { padding: 10px 14px; }
+  header.top nav .lbl { display: none; }
+  main { padding: 0 14px 100px; }
+  .hero { padding: 32px 0 12px; }
+  .modes, .styles, .grid2 { grid-template-columns: 1fr; }
+  .shead { grid-template-columns: 1fr; }
+  .cover { width: 120px; }
+  .cover .t1 { font-size: 14px; }
+  .scene { grid-template-columns: 1fr; gap: 4px; }
+  .card { padding: 16px; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <button class="brand" data-go="home" aria-label="Story Agent home">
+    <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#FFE500"/><path d="M9 9h14v10l-5 5H9z" fill="#15161A"/><circle cx="14" cy="15" r="2" fill="#FFE500"/><circle cx="19" cy="15" r="2" fill="#FFE500"/></svg>
+    Story Agent
+  </button>
+  <nav>
+    <button class="btn ghost" data-go="home">✍️ <span class="lbl">New story</span></button>
+    <button class="btn ghost" data-go="library">📚 <span class="lbl">Library</span> <span class="count" id="libCount">0</span></button>
+    <button class="btn ghost" id="openSettings">⚙️ <span class="lbl">Settings</span></button>
+  </nav>
+</header>
+
+<main>
+  <!-- HOME -->
+  <section id="view-home">
+    <div class="hero">
+      <h1>Write the story people <em>rewatch.</em></h1>
+      <p>Dramatic, mysterious story scripts for Reels, TikTok and Shorts, built on the formula that took a brand-new account to 1.8M plays.</p>
+    </div>
+
+    <div class="modes" role="tablist">
+      <button class="mode on" data-mode="auto" role="tab"><b><span class="num">1</span> AI picks for me</b><span>Get a batch of original ideas, choose the one you like, get the full script.</span></button>
+      <button class="mode" data-mode="prompt" role="tab"><b><span class="num">2</span> From my prompt</b><span>Paste a viewer comment, a "what if", or your own idea.</span></button>
+    </div>
+
+    <div class="card">
+      <div class="field">
+        <p class="label">Style</p>
+        <div class="styles" id="styles"></div>
+      </div>
+
+      <div id="autoFields">
+        <div class="field">
+          <p class="label">Theme <span class="muted" style="text-transform:none;letter-spacing:0;font-weight:400">(optional)</span></p>
+          <input class="text" id="theme" placeholder="e.g. soccer, little sister, birthdays, Diwali, a dog, school…" maxlength="200">
+        </div>
+      </div>
+
+      <div id="promptFields" class="hidden">
+        <div class="field">
+          <p class="label">Your prompt</p>
+          <textarea id="promptText" placeholder="Paste a comment like &quot;do one where the grandpa comes back as a ghost&quot;, or your own idea like &quot;a town where you can hear your pet's thoughts for one day&quot;…" maxlength="4000"></textarea>
+        </div>
+      </div>
+
+      <div class="row field">
+        <div id="countWrap"><p class="label">Ideas</p><div class="seg" id="countSeg"><button data-v="3">3</button><button data-v="6" class="on">6</button><button data-v="9">9</button></div></div>
+        <div><p class="label">Video length</p><div class="seg" id="lenSeg"><button data-v="60">60s</button><button data-v="75" class="on">75s</button><button data-v="90">90s</button></div></div>
+      </div>
+
+      <div class="go">
+        <button class="btn primary" id="goIdeas">✨ Give me ideas</button>
+        <button class="btn hidden" id="goScript">📝 Write the script now</button>
+      </div>
+      <div id="homeErr" class="err hidden"></div>
+    </div>
+
+    <div id="ideasWrap" class="hidden">
+      <div class="section-h"><h2 id="ideasTitle">Pick one</h2><button class="btn small" id="moreIdeas">↻ More ideas</button></div>
+      <p class="muted" style="margin:0">Tap a twist to see it. Pick the one that gives you chills.</p>
+      <div class="ideas" id="ideas"></div>
+    </div>
+  </section>
+
+  <!-- SCRIPT -->
+  <section id="view-script" class="hidden">
+    <button class="btn small ghost back" data-go="home">← New story</button>
+    <div class="shead">
+      <div>
+        <div class="row" style="gap:8px"><span class="pill red" id="sPart">PART 1</span><span class="pill" id="sStyle"></span><span class="pill" id="sLen"></span></div>
+        <h1 id="sTitle"></h1>
+        <div class="hookline" id="sHook"></div>
+        <div class="actions">
+          <button class="btn primary" id="copyVO">🎙️ Copy voiceover</button>
+          <button class="btn" id="copyAll">📋 Copy full script</button>
+          <button class="btn" id="download">⬇️ Download</button>
+          <button class="btn" id="nextPart">➡️ Write Part 2</button>
+        </div>
+      </div>
+      <div class="cover" aria-label="Cover text preview"><div class="t1"><span id="c1"></span><span class="t2" id="c2"></span></div><div class="fig"></div><small>cover text</small></div>
+    </div>
+
+    <div class="card">
+      <p class="label">Make it better</p>
+      <div class="tweaks" id="tweaks">
+        <button class="btn small" data-tweak="emotional">😢 More emotional</button>
+        <button class="btn small" data-tweak="mysterious">🌑 More mysterious</button>
+        <button class="btn small" data-tweak="twist">🌀 Bigger twist</button>
+        <button class="btn small" data-tweak="hook">🎣 Stronger hook</button>
+        <button class="btn small" data-tweak="funnier">😏 Funnier setup</button>
+        <button class="btn small" data-tweak="shorter">✂️ Shorter</button>
+        <div class="custom"><input class="text" id="tweakText" placeholder="Or say what to change…" maxlength="400"><button class="btn small" id="tweakGo">Change</button></div>
+        <button class="btn small ghost hidden" id="undo">↶ Undo</button>
+      </div>
+    </div>
+
+    <div class="section-h"><h2>Scenes</h2><span class="muted" id="sceneCount"></span></div>
+    <div class="scenes" id="scenes"></div>
+
+    <div class="grid2" style="margin-top:14px">
+      <div class="box"><h3>Hidden clues</h3><ul id="sClues"></ul></div>
+      <div class="box"><h3>The twist</h3><details class="spoil"><summary>Show twist</summary><div id="sTwist"></div></details>
+        <h3 style="margin-top:14px">Last line on screen</h3><p class="big" id="sEnd"></p></div>
+    </div>
+
+    <div class="section-h"><h2>Posting</h2></div>
+    <div class="grid2" style="margin-top:14px">
+      <div class="box"><h3>Caption <button class="btn small" data-copy="caption">Copy</button></h3><p id="sCaption"></p></div>
+      <div class="box"><h3>Pinned comment <button class="btn small" data-copy="pinned">Copy</button></h3><p id="sPinned"></p>
+        <h3 style="margin-top:14px">Next part tease</h3><p id="sNext"></p></div>
+    </div>
+    <div class="box" style="margin-top:14px"><h3>Why it works</h3><p id="sWhy"></p></div>
+    <div style="margin-top:22px"><button class="btn small danger" id="deleteScript">Delete this script</button></div>
+  </section>
+
+  <!-- LIBRARY -->
+  <section id="view-library" class="hidden">
+    <div class="section-h" style="margin-top:36px"><h2>Your scripts</h2><span class="muted">Saved in this browser</span></div>
+    <div class="lib" id="lib"></div>
+  </section>
+</main>
+
+<!-- settings -->
+<div class="veil hidden" id="settings">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="setH">
+    <h2 id="setH">Settings</h2>
+    <p class="muted" style="margin-top:0">Story Agent uses a free Gemini key (the same kind as Clip Agent). It's saved only in this browser.</p>
+    <ol>
+      <li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in.</li>
+      <li>Click <b>Create API key</b> and copy it.</li>
+      <li>Paste it here and press <b>Save</b>.</li>
+    </ol>
+    <p class="label">Gemini API key</p>
+    <input class="text" id="keyInput" type="password" placeholder="AIza…" autocomplete="off" spellcheck="false">
+    <div class="status" id="keyStatus"></div>
+    <p class="label" style="margin-top:16px">Where the writing comes from</p>
+    <div class="seg" id="provSeg"><button data-v="gemini" class="on">Gemini (automatic)</button><button data-v="manual">Paste from Claude</button></div>
+    <p class="hint">"Paste from Claude" gives you a prompt to copy into Claude, then you paste the answer back. Handy when Gemini's free limit runs out.</p>
+    <details style="margin-top:12px"><summary class="muted" style="cursor:pointer">Advanced</summary>
+      <p class="label" style="margin-top:12px">Gemini model (leave empty for automatic)</p>
+      <input class="text" id="modelInput" placeholder="automatic" spellcheck="false">
+    </details>
+    <div class="foot">
+      <button class="btn" id="testKey">Test key</button>
+      <button class="btn" id="closeSettings">Close</button>
+      <button class="btn primary" id="saveSettings">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- paste from Claude -->
+<div class="veil hidden" id="manual">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="manH">
+    <h2 id="manH">Get this one from Claude</h2>
+    <p class="muted" id="manWhy" style="margin-top:0"></p>
+    <ol>
+      <li><button class="btn small" id="manCopy">📋 Copy the prompt</button></li>
+      <li>Paste it into Claude and send it.</li>
+      <li>Copy Claude's whole answer and paste it below.</li>
+    </ol>
+    <textarea id="manAnswer" placeholder="Paste Claude's answer here…"></textarea>
+    <div class="status bad" id="manStatus"></div>
+    <div class="foot"><button class="btn" id="manCancel">Cancel</button><button class="btn primary" id="manUse">Use this answer</button></div>
+  </div>
+</div>
+
+<!-- loading -->
+<div class="veil hidden" id="loading">
+  <div class="modal loading"><div class="spinner"></div><h2 id="loadH">Writing…</h2><p id="loadP"></p></div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
