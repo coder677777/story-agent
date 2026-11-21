@@ -1,6 +1,7 @@
 import {
   STYLES, TWEAKS, ideasPrompt, ideasFromPromptPrompt, scriptPrompt, nextPartPrompt, tweakPrompt,
-} from "./prompts.js?v=1.1";
+} from "./prompts.js?v=1.2";
+import { setupVideo } from "./video.js?v=1.2";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -79,7 +80,7 @@ class KeyError extends Error { constructor() { super("Gemini rejected the API ke
 class QuotaError extends Error {}
 
 // ---------- activity log (saved in this browser so you can copy it for Claude)
-const VERSION = "1.1";
+const VERSION = "1.2";
 const LOG = LS.get("log", []);
 function log(msg, bad = false) {
   const line = `${new Date().toLocaleTimeString()}  ${bad ? "✗ " : ""}${msg}`;
@@ -104,6 +105,7 @@ const STEPS = [
 // How long to wait before giving up on a step (can be changed for testing via localStorage "sa.timeouts")
 const T = Object.assign({ headers: 45e3, first: 150e3, idle: 45e3 }, LS.get("timeouts", {}));
 let job = null;
+let video = null;
 const fmt = (ms) => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
 class Cancelled extends Error { constructor() { super("CANCELLED"); } }
 
@@ -399,10 +401,11 @@ function normScript(d, extra = {}) {
 
 // ---------- views
 function go(view) {
-  for (const v of ["home", "script", "library"]) $("#view-" + v).classList.toggle("hidden", v !== view);
+  for (const v of ["home", "script", "library", "video"]) $("#view-" + v).classList.toggle("hidden", v !== view);
+  if (view !== "video") video?.stop();
   $$("header nav [data-go]").forEach((b) => b.classList.toggle("on", b.dataset.go === view));
   if (view === "library") renderLibrary();
-  if (view !== "script") { state.current = null; if (location.hash.startsWith("#s=")) history.replaceState(null, "", location.pathname); }
+  if (view !== "script") { state.current = null; if (view !== "video" && location.hash) history.replaceState(null, "", location.pathname); }
   window.scrollTo(0, 0);
 }
 $$("[data-go]").forEach((b) => b.addEventListener("click", () => go(b.dataset.go)));
@@ -562,6 +565,12 @@ function fullText(s) {
   L.push("", "VOICEOVER ONLY", voText(s));
   return L.join("\n");
 }
+function openVideo(id) {
+  const s = state.scripts.find((x) => x.id === id);
+  if (!s) { go("home"); return; }
+  go("video"); history.replaceState(null, "", "#v=" + s.id); video.open(s);
+}
+$("#makeVideo").onclick = () => openVideo(state.current.id);
 $("#copyVO").onclick = () => copy(voText(state.current), "Voiceover copied");
 $("#copyAll").onclick = () => copy(fullText(state.current), "Full script copied");
 $("#download").onclick = () => {
@@ -677,6 +686,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ---------- start
+video = setupVideo({ $, $$, LS, log, copy, toast, esc, ask, cfg, GBASE, report, sleep, fmt, Cancelled, openScript });
 renderStyles();
 setMode(state.mode);
 seg("countSeg", "count");
@@ -684,5 +694,6 @@ seg("lenSeg", "length");
 renderIdeas();
 $("#libCount").textContent = state.scripts.length;
 if (location.hash.startsWith("#s=")) openScript(location.hash.slice(3));
+else if (location.hash.startsWith("#v=")) openVideo(location.hash.slice(3));
 else go("home");
 if (!cfg.key && cfg.provider === "gemini") setTimeout(() => openSettings(), 400);

@@ -198,3 +198,51 @@ function compact(s) {
     voiceover: (s.scenes || []).map((x) => x.vo).join(" "),
   };
 }
+
+// ---------- video: voice + pictures
+// How the narrator should sound. Gemini's voices follow plain-English directions.
+export const VOICE_STYLE = "Read this like a kid of about 12 telling a true story that still hurts a little. " +
+  "Quiet, natural and close to the mic. Short pause after every full stop, a longer pause between paragraphs. " +
+  "Deadpan on the jokes. Slower and softer near the end.";
+
+// Gemini voices that suit young storytelling (name: description)
+export const VOICES = {
+  Puck: "young, upbeat",
+  Leda: "youthful, soft",
+  Achird: "friendly",
+  Fenrir: "excitable",
+  Aoede: "breezy",
+  Kore: "firm, clear",
+  Sulafat: "warm",
+  Enceladus: "breathy, intimate",
+  Charon: "deep, narrator",
+};
+
+// The look of every AI picture
+export const ART_STYLE = "Blocky low-poly 3D animated game style: simple cube-shaped characters with flat colors and simple " +
+  "cartoon faces, toy-like small-town sets, soft cinematic lighting, shallow depth of field, vertical 9:16 frame. " +
+  "No words, letters, captions, logos or watermarks anywhere in the image.";
+
+export function artPlanPrompt({ script }) {
+  const scenes = (script.scenes || []).map((s, i) => ({ i, visual: s.visual, camera: s.camera, clue: s.clue, vo: s.vo }));
+  return `You are the art director for a vertical animated short video.
+Art style for every frame: ${ART_STYLE}
+
+Story title: ${script.title}
+Twist (keep it hidden in the pictures until the right scene): ${script.twist}
+Scenes:
+${JSON.stringify(scenes, null, 1)}
+
+Write one image prompt per scene for a still frame that will be slowly zoomed and panned.
+- First, fix each character's look (age, hair, clothes colors, one detail) and reuse those exact words every time they appear,
+  so the characters stay the same across all pictures.
+- Each prompt: who is in the frame and what they are doing, the setting, time of day and lighting, the mood, and the framing
+  from the camera note (close-up, wide, over-the-shoulder...). Include the scene's hidden clue as a small visible detail.
+- Never ask for written words in the image. If a clue is writing, describe it as "scribbles" or "a note".
+- Under 70 words each.
+
+Return JSON only:
+{"characters": [{"name": "...", "look": "..."}],
+ "mood": "one of: sad, warm, tense, eerie, hopeful",
+ "scenes": [{"i": 0, "prompt": "..."}]}`;
+}

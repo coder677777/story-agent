@@ -40,6 +40,21 @@ The key stays in your browser and only goes to Google.
 If the free key runs out for the day, the site gives you a prompt to paste into Claude and a box to paste
 the answer back. You can also pick **Paste from Claude** in Settings to always work that way.
 
+## Make the video
+
+On any script press **🎬 Make the video**. It records the voiceover, gets a picture for each scene, lines up the timing,
+and builds a vertical video with slow camera moves, big captions, on-screen labels, a hit sound on impact moments,
+a rewind effect, music and an end card. Press **Play** to watch, then **Export video** to download an MP4.
+
+- **Voice:** free with your Gemini key (about 10 a day; each video uses 1). Pick a voice and say how it should sound.
+  Out of free voices? Press **Use my own recording** and upload an MP3.
+- **Pictures:** **My pictures/clips** (upload a screenshot or a short Roblox recording per scene, free and best-looking),
+  **Text cards** (free, moody backgrounds with big captions), or **AI pictures** (needs billing turned on in AI Studio,
+  about 3–7¢ a picture, roughly 50¢ a video). You can mix: upload some scenes, leave others as cards.
+- **Export** records in real time, so a 75-second video takes 75 seconds. Keep the tab open and in front. Use Chrome or
+  Edge on your PC to get MP4.
+- Voice and pictures are saved in your browser, so you don't spend free voices twice.
+
 ## Stuck or broken?
 
 While it works, a window shows each step live: connect → send → AI is thinking → writing it out (with a running
