@@ -48,6 +48,11 @@ a rewind effect, music and an end card. Press **Play** to watch, then **Export v
 
 - **Voice:** free with your Gemini key (about 10 a day; each video uses 1). Pick a voice and say how it should sound.
   Out of free voices? Press **Use my own recording** and upload an MP3.
+- **🎬 AI video clips** (closest to @pov.deadlinestories): each scene gets a consistent picture, then Google's video model
+  animates it into a moving clip. Paid on your Gemini key with billing on: about 7¢ a second at 720p (about $5 for a
+  75-second video) or about 2¢ a second as a 360p draft. It shows the price and asks before charging. A failed scene keeps
+  its picture; press **🎬 Clip** on it to retry. The editor mixes the clips' own sound under the voice and drops the music
+  right before the big moment.
 - **Pictures:** **My pictures/clips** (upload a screenshot or a short Roblox recording per scene, free and best-looking),
   **Text cards** (free, moody backgrounds with big captions), or **AI pictures** (needs billing turned on in AI Studio,
   about 3–7¢ a picture, roughly 50¢ a video). You can mix: upload some scenes, leave others as cards.

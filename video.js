@@ -1,7 +1,7 @@
 // Story Agent: Video Studio. Turns a script into a vertical video right in the browser:
 // a plan for the pictures, a voiceover (free Gemini voice), pictures (AI, your own, or text cards),
 // timing, an animated preview, and an MP4 export. Every step shows live progress and logs what happened.
-import { VOICES, VOICE_STYLE, ART_STYLE, artPlanPrompt } from "./prompts.js?v=1.2";
+import { VOICES, VOICE_STYLE, ART_STYLE, artPlanPrompt, clipPrompt } from "./prompts.js?v=1.3";
 
 export function setupVideo(ctx) {
   const { $, $$, LS, log, copy, toast, esc, ask, cfg, GBASE, report, sleep, fmt, Cancelled, openScript } = ctx;
@@ -45,8 +45,10 @@ export function setupVideo(ctx) {
           <p class="hint">Free with your Gemini key: about 10 voices a day. Each video uses 1.</p>
 
           <p class="label" style="margin-top:16px">Pictures</p>
-          <div class="seg" id="vPics"><button data-v="mine">My pictures/clips</button><button data-v="cards">Text cards</button><button data-v="ai">AI pictures</button></div>
+          <div class="seg wrap" id="vPics"><button data-v="clips">🎬 AI video clips</button><button data-v="ai">AI pictures</button><button data-v="mine">My pictures/clips</button><button data-v="cards">Text cards</button></div>
           <p class="hint" id="vPicsHint"></p>
+          <div id="vClipOpts" class="hidden"><p class="label" style="margin-top:12px">Clip quality</p>
+            <div class="seg" id="vClipRes"><button data-v="360p">360p draft (~2¢/sec)</button><button data-v="720p">720p (~7¢/sec)</button></div></div>
 
           <div class="row" style="margin-top:14px">
             <div><p class="label">Music</p><div class="seg" id="vMusic"><button data-v="pad">Soft piano pad</button><button data-v="none">None</button><button data-v="mine">My file</button></div></div>
@@ -88,11 +90,13 @@ export function setupVideo(ctx) {
   $("#vVoice").innerHTML = Object.entries(VOICES).map(([k, d]) => `<option value="${k}">${k} (${d})</option>`).join("");
 
   // ---------- state
-  const DEF = Object.assign({ voice: "Puck", voiceStyle: VOICE_STYLE, pics: "cards", music: "pad", quality: 720 }, LS.get("videoDefaults", {}));
+  const DEF = Object.assign({ voice: "Puck", voiceStyle: VOICE_STYLE, pics: "cards", music: "pad", quality: 720, clipRes: "720p" }, LS.get("videoDefaults", {}));
+  const RATE = { "360p": 0.023, "720p": 0.07 }, PIC_COST = 0.05;
   let cur = null;   // the script
   let vs = null;    // this video's saved state
   let run = null;   // the job that's running
   const media = {}; // scene index -> { kind, el, url }
+  const failedClips = new Set();
   let voiceBuf = null, musicBuf = null;
   const key = (k) => `${cur.id}:${k}`;
   const save = () => LS.set("video." + cur.id, vs);
@@ -107,9 +111,17 @@ export function setupVideo(ctx) {
   bindSeg("vPics", "pics", () => { picsHint(); renderTiles(); });
   bindSeg("vMusic", "music", () => { if (vs.music === "mine") $("#vMusicFile").click(); });
   bindSeg("vQual", "quality");
+  bindSeg("vClipRes", "clipRes", () => picsHint());
   $("#vVoice").onchange = () => { vs.voice = $("#vVoice").value; save(); LS.set("videoDefaults", { ...LS.get("videoDefaults", {}), voice: vs.voice }); };
   $("#vVoiceStyle").onchange = () => { vs.voiceStyle = $("#vVoiceStyle").value.trim() || VOICE_STYLE; save(); };
   function picsHint() {
+    $("#vClipOpts").classList.toggle("hidden", vs.pics !== "clips");
+    if (vs.pics === "clips") {
+      const secs = vs.timing ? vs.timing.scenes.reduce((a, s) => a + clipSecs(s.dur), 0) : cur.scenes.length * 5;
+      $("#vPicsHint").textContent = `Real moving animation, the closest to @pov.deadlinestories. Each scene gets a picture, then Google animates it. ` +
+        `Paid on your Google key (billing must be on): about $${(secs * RATE[vs.clipRes] + cur.scenes.length * PIC_COST).toFixed(2)} for this video. You'll confirm before anything is charged.`;
+      return;
+    }
     $("#vPicsHint").textContent = {
       mine: "Upload a screenshot or a clip for each scene below. Free, and the best-looking option.",
       cards: "Free. Moody animated backgrounds with big captions. Upload pictures for any scene to mix them in.",
@@ -207,9 +219,10 @@ export function setupVideo(ctx) {
     $("#vTitle").textContent = script.title;
     $("#vVoice").value = vs.voice;
     $("#vVoiceStyle").value = vs.voiceStyle;
-    setSeg("vPics", vs.pics); setSeg("vMusic", vs.music); setSeg("vQual", vs.quality);
+    setSeg("vPics", vs.pics); setSeg("vMusic", vs.music); setSeg("vQual", vs.quality); setSeg("vClipRes", vs.clipRes);
     picsHint(); vErr(""); $("#vOut").innerHTML = ""; $("#vExportHint").textContent = "";
     for (const k of Object.keys(media)) { if (media[k].url) URL.revokeObjectURL(media[k].url); delete media[k]; }
+    failedClips.clear();
     voiceBuf = null;
     await loadMedia();
     const vb = await get(key("voice"));
@@ -222,10 +235,11 @@ export function setupVideo(ctx) {
   }
   function vlogReset() { $("#vLog").textContent = ""; }
   function refreshSteps() {
-    vstep("plan", vs.pics !== "ai" ? "skip" : vs.plan ? "done" : "", vs.pics !== "ai" ? "Only needed for AI pictures" : vs.plan ? `${vs.plan.scenes.length} picture ideas` : "");
+    const needPlan = vs.pics === "ai" || vs.pics === "clips";
+    vstep("plan", !needPlan ? "skip" : vs.plan ? "done" : "", !needPlan ? "Only needed for AI pictures or clips" : vs.plan ? `${vs.plan.scenes.length} picture ideas` : "");
     vstep("voice", voiceBuf ? "done" : "", voiceBuf ? `${fmt(voiceBuf.duration * 1000)} · ${vs.voiceSrc}` : "");
-    const n = cur.scenes.filter((_, i) => media[i]).length;
-    vstep("pics", n || vs.pics === "cards" ? "done" : "", `${n} of ${cur.scenes.length} scenes have a picture or clip${n < cur.scenes.length ? " (the rest become text cards)" : ""}`);
+    const n = cur.scenes.filter((_, i) => media[i]).length, nc = cur.scenes.filter((_, i) => media[i]?.kind === "video").length;
+    vstep("pics", n || vs.pics === "cards" ? "done" : "", `${n} of ${cur.scenes.length} scenes have a picture or clip${nc ? ` (${nc} moving)` : ""}${n < cur.scenes.length ? ", the rest become text cards" : ""}`);
     vstep("timing", vs.timing && voiceBuf ? "done" : "", vs.timing && voiceBuf ? `${fmt(vs.timing.total * 1000)} total` : "");
     vstep("ready", vs.timing && voiceBuf ? "done" : "", vs.timing && voiceBuf ? "Press Play, then Export" : "");
   }
@@ -237,20 +251,34 @@ export function setupVideo(ctx) {
     $("#vPicCount").textContent = `${n}/${cur.scenes.length} with pictures`;
     $("#vTiles").innerHTML = cur.scenes.map((s, i) => {
       const m = media[i];
-      const thumb = m ? (m.kind === "video" ? `<video src="${m.url}" muted playsinline></video>` : `<img src="${m.url}" alt="">`)
+      const thumb = m ? (m.kind === "video" ? `<video src="${m.url}#t=0.5" muted playsinline preload="metadata"></video>` : `<img src="${m.url}" alt="">`)
         : `<div class="ph">${esc(s.visual || "Text card")}</div>`;
       return `<div class="vtile" data-i="${i}">
-        <div class="vthumb">${thumb}<span class="vnum">${i + 1}</span><span class="vst" data-st="${i}"></span></div>
+        <div class="vthumb">${thumb}<span class="vnum">${i + 1}</span><span class="vst${failedClips.has(i) ? " bad" : ""}" data-st="${i}">${failedClips.has(i) ? "clip failed" : m?.kind === "video" && vs.pics === "clips" ? "🎬" : ""}</span></div>
         <p class="vvo">${esc(s.vo || "(no voiceover)")}</p>
         <div class="vbtns">
           <button class="btn small" data-up="${i}">⬆ ${m ? "Replace" : "Upload"}</button>
-          ${vs.pics === "ai" ? `<button class="btn small" data-ai="${i}" title="Make an AI picture for this scene">✨ AI</button>` : ""}
+          ${vs.pics === "ai" || vs.pics === "clips" ? `<button class="btn small" data-ai="${i}" title="Make an AI picture for this scene">✨ Pic</button>` : ""}
+          ${vs.pics === "clips" ? `<button class="btn small" data-clip="${i}" title="Animate this scene into a video clip">🎬 Clip</button>` : ""}
           ${m ? `<button class="btn small ghost" data-rm="${i}" title="Remove">✕</button>` : ""}
         </div></div>`;
     }).join("");
     $$("[data-up]").forEach((b) => b.onclick = () => { pickFor = Number(b.dataset.up); $("#vFile").value = ""; $("#vFile").click(); });
     $$("[data-rm]").forEach((b) => b.onclick = async () => { const i = Number(b.dataset.rm); await del(key("m" + i)); delete vs.media[i]; save(); dropMedia(i); renderTiles(); refreshSteps(); });
     $$("[data-ai]").forEach((b) => b.onclick = () => runJob(async () => { await ensurePlan(); await genImage(Number(b.dataset.ai), true); }));
+    $$("[data-clip]").forEach((b) => b.onclick = () => runJob(async () => {
+      const i = Number(b.dataset.clip);
+      if (!voiceBuf) await makeVoice();
+      if (!vs.timing) await computeTiming();
+      const cost = clipSecs(vs.timing.scenes[i].dur) * RATE[vs.clipRes] + (media[i] ? 0 : PIC_COST);
+      if (!confirm(`Make a moving clip for scene ${i + 1}? About $${cost.toFixed(2)} on your Google bill.`)) throw new Cancelled();
+      await ensurePlan();
+      vstep("pics", "on", `Scene ${i + 1}`);
+      if (!(await keyframe(i))) await genImage(i, false);
+      await genClip(i);
+      vstep("pics", "done", `Scene ${i + 1} is moving`);
+      await prepPlayer();
+    }));
   }
   function tileStatus(i, text, bad) { const el = $(`[data-st="${i}"]`); if (el) { el.textContent = text; el.classList.toggle("bad", !!bad); } }
   $("#vFile").onchange = async () => {
@@ -316,9 +344,34 @@ export function setupVideo(ctx) {
   async function makeAll() {
     vlog(`— Make the video: "${cur.title}" part ${cur.part} (pictures: ${vs.pics}, voice: ${vs.voice})`);
     vstep("timing", "", ""); vstep("ready", "", "");
-    if (vs.pics === "ai") await ensurePlan();
+    if (vs.pics === "clips") {
+      if (!voiceBuf) await makeVoice(); else vlog("Voice already recorded, keeping it (remove it with ↻ Redo voice)");
+      await computeTiming();
+      const todo = cur.scenes.map((_, i) => i).filter((i) => media[i]?.kind !== "video");
+      const secs = todo.reduce((a, i) => a + clipSecs(vs.timing.scenes[i].dur), 0);
+      const cost = secs * RATE[vs.clipRes] + todo.filter((i) => !media[i]).length * PIC_COST;
+      if (todo.length && !confirm(`Make ${todo.length} moving clips (${secs}s of video at ${vs.clipRes})?\nAbout $${cost.toFixed(2)} will go on your Google bill. Each clip takes about 1–2 minutes.`)) throw new Cancelled();
+      if (todo.length) vlog(`Making ${todo.length} clips, ${secs}s at ${vs.clipRes}, estimated $${cost.toFixed(2)}`);
+      await ensurePlan();
+      vstep("pics", "on", "Starting…");
+      let made = 0, failed = [], spent = 0;
+      for (const i of todo) {
+        if (run.cancelled) throw new Cancelled();
+        const base = (what) => { $(`#vSteps [data-step="pics"]`).dataset.base = `Scene ${i + 1} of ${cur.scenes.length}: ${what} · ${made} done · ~$${spent.toFixed(2)} so far`; };
+        try {
+          if (!(await keyframe(i))) { base("drawing the picture"); await genImage(i, false); spent += PIC_COST; renderTiles(); }
+          base("animating (1–2 min)");
+          await genClip(i); spent += clipSecs(vs.timing.scenes[i].dur) * RATE[vs.clipRes]; made++;
+          renderTiles(); await prepPlayer();
+        } catch (e) {
+          if (e instanceof Cancelled || e instanceof BillingError) throw e;
+          failed.push(i + 1); vlog(`Scene ${i + 1} failed: ${e.message}. Moving on; it will use its picture instead.`, true);
+        }
+      }
+      vstep("pics", failed.length ? "bad" : "done", `${made} clips made (~$${spent.toFixed(2)})${failed.length ? `. Failed: scene ${failed.join(", ")}. Press 🎬 Clip on those to retry.` : ""}`);
+    } else if (vs.pics === "ai") await ensurePlan();
     if (!voiceBuf) await makeVoice();
-    else vlog("Voice already recorded, keeping it (remove it with ↻ Redo voice)");
+    else if (vs.pics !== "clips") vlog("Voice already recorded, keeping it (remove it with ↻ Redo voice)");
     if (vs.pics === "ai") {
       vstep("pics", "on", "Starting…");
       let made = 0;
@@ -330,7 +383,7 @@ export function setupVideo(ctx) {
         renderTiles();
       }
       vstep("pics", "done", `${made} new AI pictures`);
-    } else refreshSteps();
+    } else if (vs.pics !== "clips") refreshSteps();
     await computeTiming();
     await prepPlayer();
     vstep("ready", "done", "Press Play to watch, then Export");
@@ -417,10 +470,10 @@ export function setupVideo(ctx) {
     const idea = vs.plan.scenes.find((x) => Number(x.i) === i)?.prompt || scene.visual;
     const cast = (vs.plan.characters || []).map((c) => `${c.name}: ${c.look}`).join("; ");
     const text = `${ART_STYLE}\nCharacters (draw them exactly like this every time): ${cast}\nThis picture: ${idea}`;
-    const refI = Object.keys(media).map(Number).find((k) => k !== i && media[k].kind === "image" && vs.media[k] === "image");
+    let rb = null;
+    for (let k = 0; k < cur.scenes.length && !rb; k++) if (k !== i) rb = (await get(key("k" + k))) || (vs.media[k] === "image" ? await get(key("m" + k)) : null);
     const parts = [{ text }];
-    if (refI !== undefined) {
-      const rb = await get(key("m" + refI));
+    {
       if (rb) parts.unshift({ inlineData: { mimeType: rb.type || "image/png", data: await b64(rb) } }, { text: "Reference picture: keep the same characters and art style." });
     }
     const order = await imageModels();
@@ -436,7 +489,7 @@ export function setupVideo(ctx) {
           const p = r.json?.candidates?.[0]?.content?.parts?.find((x) => x.inlineData?.data);
           if (!p) { lastErr = `${m} returned no picture (${r.json?.candidates?.[0]?.finishReason || "no reason"})`; vlog(lastErr, true); break; }
           const blob = new Blob([fromB64(p.inlineData.data)], { type: p.inlineData.mimeType || "image/png" });
-          await put(key("m" + i), blob); vs.media[i] = "image"; save();
+          await put(key("m" + i), blob); await put(key("k" + i), blob); vs.media[i] = "image"; save();
           await loadOne(i, blob, "image");
           tileStatus(i, "");
           vlog(`Scene ${i + 1}: picture done`);
@@ -461,6 +514,97 @@ export function setupVideo(ctx) {
     }
     tileStatus(i, "failed", true);
     throw new Error(`Couldn't make a picture for scene ${i + 1}. ${lastErr}`);
+  }
+
+  // ---------- AI video clips (Gemini Omni through the Interactions API)
+  function clipSecs(d) { return Math.min(15, Math.max(3, Math.ceil(d + 0.3))); }
+  async function keyframe(i) { return (await get(key("k" + i))) || (vs.media[i] === "image" ? await get(key("m" + i)) : null); }
+  async function post(path, body, ms) {
+    const ctrl = new AbortController(); let timedOut = false;
+    const t = setTimeout(() => { timedOut = true; ctrl.abort(); }, ms);
+    run.abort = () => ctrl.abort();
+    try {
+      const r = await fetch(`${GBASE}${path}${path.includes("?") ? "&" : "?"}key=${encodeURIComponent(cfg.key)}`,
+        { method: body ? "POST" : "GET", headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined, signal: ctrl.signal });
+      return r;
+    } catch (e) {
+      if (run.cancelled) throw new Cancelled();
+      if (timedOut) throw new Error("Google took longer than " + Math.round(ms / 60000) + " minutes");
+      throw new Error("Couldn't reach Google. Check your internet.");
+    } finally { clearTimeout(t); }
+  }
+  async function clipModels() {
+    let all = [];
+    try { all = (await models()).filter((n) => n.includes("omni")); } catch {}
+    const listed = all.sort((a, b) => ver(b) - ver(a));
+    return [...new Set([...listed, "gemini-omni-1.2-flash", "gemini-omni-1.1-flash"])];
+  }
+  async function genClip(i) {
+    const kb = await keyframe(i);
+    if (!kb) throw new Error(`Scene ${i + 1} has no picture to animate`);
+    const dur = clipSecs(vs.timing.scenes[i].dur);
+    const motion = vs.plan?.scenes?.find((x) => Number(x.i) === i)?.motion || `${cur.scenes[i].visual}. ${cur.scenes[i].camera || "slow push-in"}`;
+    const input = [{ type: "image", data: await b64(kb), mime_type: kb.type || "image/png" }, { type: "text", text: clipPrompt({ motion }) }];
+    tileStatus(i, "animating…");
+    let uri = false, lastErr = "";
+    for (const m of await clipModels()) {
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        if (run.cancelled) throw new Cancelled();
+        vlog(`Scene ${i + 1}: animating ${dur}s at ${vs.clipRes} with ${m}${uri ? " (file delivery)" : ""}`);
+        const t0 = Date.now();
+        const rf = { type: "video", duration: `${dur}s`, aspect_ratio: "9:16", resolution: vs.clipRes };
+        if (uri) rf.delivery = "uri";
+        const r = await post("interactions", { model: m, input, response_format: rf, store: false }, 6 * 60e3);
+        const text = await r.text(); const low = text.toLowerCase();
+        if (r.ok) {
+          let j; try { j = JSON.parse(text); } catch { lastErr = "Google's answer wasn't readable"; break; }
+          const part = (j.steps || []).filter((s) => s.type === "model_output").flatMap((s) => s.content || []).find((c) => c.type === "video");
+          if (!part) { lastErr = `no video came back (${j.status || "no status"})`; vlog(`${m}: ${lastErr} ${short(text)}`, true); break; }
+          let blob;
+          if (part.data) blob = new Blob([fromB64(part.data)], { type: part.mime_type || "video/mp4" });
+          else if (part.uri) blob = await downloadFile(part.uri, i);
+          else { lastErr = "the video had no data"; break; }
+          await put(key("m" + i), blob); vs.media[i] = "video"; save();
+          await loadOne(i, blob, "video");
+          tileStatus(i, ""); failedClips.delete(i);
+          vlog(`Scene ${i + 1}: clip done in ${fmt(Date.now() - t0)} (${(blob.size / 1e6).toFixed(1)} MB)`);
+          return;
+        }
+        vlog(`${m}: HTTP ${r.status} ${short(text)}`, true);
+        if (r.status === 429 && (isDaily(low) || /billing|paid|free tier|free_tier/.test(low))) {
+          tileStatus(i, "needs billing", true);
+          throw new BillingError("AI video clips need billing turned on for your key in Google AI Studio (Settings → Billing). Nothing was charged. Or pick a free Pictures option.");
+        }
+        if ((r.status === 400 || r.status === 403) && /billing|paid tier|free tier|not available on the free/.test(low)) {
+          tileStatus(i, "needs billing", true);
+          throw new BillingError("AI video clips need billing turned on for your key in Google AI Studio. Nothing was charged. Or pick a free Pictures option.");
+        }
+        if (r.status === 429) { await waitRetry(text, "pics", `Scene ${i + 1}`); continue; }
+        if (!uri && /too large|exceeds|4 ?mb|size limit|payload/.test(low)) { uri = true; continue; }
+        if (r.status === 404 || (r.status === 400 && /model/.test(low) && /not found|not supported|unknown/.test(low))) { lastErr = `${m} isn't available`; break; }
+        if (/safety|blocked|policy|prohibited/.test(low)) { lastErr = "Google's safety filter blocked this scene. Try ✨ Pic for a new picture, then 🎬 Clip again"; break; }
+        if (r.status >= 500) { await sleep(5000 * attempt); continue; }
+        lastErr = short(text); break;
+      }
+      if (/safety/.test(lastErr)) break;
+    }
+    failedClips.add(i); tileStatus(i, "clip failed", true);
+    throw new Error(lastErr || "no clip came back");
+  }
+  async function downloadFile(uri, i) {
+    const id = (uri.split("files/")[1] || "").split(/[?:/]/)[0];
+    if (!id) throw new Error("Google gave a file link that couldn't be read");
+    for (let k = 0; k < 90; k++) {
+      if (run.cancelled) throw new Cancelled();
+      const r = await post(`files/${id}`, null, 30e3);
+      const j = await r.json().catch(() => ({}));
+      if (j.state === "ACTIVE") break;
+      if (j.state === "FAILED") throw new Error("Google's video file failed to process");
+      tileStatus(i, "saving…"); await sleep(3000);
+    }
+    const r = await post(`files/${id}:download?alt=media`, null, 120e3);
+    if (!r.ok) throw new Error(`Couldn't download the clip (HTTP ${r.status})`);
+    return await r.blob();
   }
 
   // ---------- timing: split the voice at its natural pauses so each scene gets its own lines
@@ -509,6 +653,7 @@ export function setupVideo(ctx) {
     vs.timing = { scenes, endStart: t, total: t + END };
     save();
     vlog(`Timing: ${scenes.length} scenes, ${gaps.length} pauses found, video ${fmt(vs.timing.total * 1000)}`);
+    picsHint();
     vstep("timing", "done", `${fmt(vs.timing.total * 1000)} total`);
   }
 
@@ -635,13 +780,34 @@ export function setupVideo(ctx) {
     }
     const mg = ac.createGain(); mg.connect(master); nodes.push(mg);
     const endAt = t0 + (tm.total - from);
+    // Music follows the story: it drops out right before the big moment and comes back after, then swells on the end card.
+    const envelope = (B) => {
+      const at = (s) => t0 + s - from, g0 = mg.gain;
+      g0.setValueAtTime(B, t0);
+      tm.scenes.forEach((s, i) => {
+        if (!has(cur.scenes[i], IMPACT) || i === 0) return;
+        const p = tm.scenes[i - 1], down = at(p.start + p.dur * 0.4), up = at(s.start + s.dur + 0.4);
+        if (up <= t0) return;
+        g0.setValueAtTime(B, Math.max(t0, down)); g0.linearRampToValueAtTime(0.0001, Math.max(t0, down) + 0.5);
+        g0.setValueAtTime(0.0001, Math.max(t0, up)); g0.linearRampToValueAtTime(B, Math.max(t0, up) + 1.5);
+      });
+      const e = at(tm.endStart);
+      if (e > t0) { g0.setValueAtTime(B, e); g0.linearRampToValueAtTime(B * 1.7, e + 0.8); }
+      g0.setValueAtTime(B * 1.7, Math.max(t0, endAt - 1.2)); g0.linearRampToValueAtTime(0.0001, endAt);
+    };
+    // Sound from the clips themselves (footsteps, wind, crowd), kept low under the voice
+    const cg = ac.createGain(); cg.gain.value = 0.32; cg.connect(master); nodes.push(cg);
+    for (const m of Object.values(media)) {
+      if (m.kind !== "video") continue;
+      try { if (!m.src) { m.el.muted = false; m.src = ac.createMediaElementSource(m.el); } m.src.connect(cg); nodes.push(m.src); } catch {}
+    }
     if (vs.music === "mine" && musicBuf) {
       const src = ac.createBufferSource(); src.buffer = musicBuf; src.loop = true; src.connect(mg);
-      mg.gain.setValueAtTime(0.16, t0); mg.gain.setValueAtTime(0.16, Math.max(t0, endAt - 1.5)); mg.gain.linearRampToValueAtTime(0, endAt);
+      envelope(0.16);
       src.start(t0, from % musicBuf.duration); src.stop(endAt + 0.1); nodes.push(src);
     } else if (vs.music !== "none") {
       const lp = ac.createBiquadFilter(); lp.type = "lowpass"; lp.frequency.value = 1100; lp.connect(mg); nodes.push(lp);
-      mg.gain.value = 0.055;
+      envelope(0.055);
       const minor = [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]], major = [[48, 52, 55], [55, 59, 62], [57, 60, 64], [53, 57, 60]];
       const prog = /warm|hopeful/.test(vs.plan?.mood || moodGuess()) ? major : minor, len = 4;
       for (let c = Math.floor(from / len); c * len < tm.total; c++) {

@@ -240,9 +240,20 @@ Write one image prompt per scene for a still frame that will be slowly zoomed an
   from the camera note (close-up, wide, over-the-shoulder...). Include the scene's hidden clue as a small visible detail.
 - Never ask for written words in the image. If a clue is writing, describe it as "scribbles" or "a note".
 - Under 70 words each.
+- Also write "motion": how this picture comes alive as one continuous 3-8 second animated shot: the character's action and
+  facial expression, what else moves (wind, crowd, ball, light), and one camera move (slow push-in, pan, orbit, handheld).
+  Characters never talk or move their mouths (a narrator speaks over the video). Under 40 words.
 
 Return JSON only:
 {"characters": [{"name": "...", "look": "..."}],
  "mood": "one of: sad, warm, tense, eerie, hopeful",
- "scenes": [{"i": 0, "prompt": "..."}]}`;
+ "scenes": [{"i": 0, "prompt": "...", "motion": "..."}]}`;
+}
+
+// How each picture gets animated into a video clip
+export function clipPrompt({ motion }) {
+  return `Animate this picture into one continuous shot: ${motion}
+Keep the exact same characters, colors, lighting and blocky low-poly 3D animated style as the picture. Smooth, cinematic,
+expressive animation like a polished animated short. Vertical 9:16. Nobody talks and mouths stay closed.
+No on-screen text, captions, subtitles or logos. Sound: natural ambient sound effects only, no music, no voices.`;
 }

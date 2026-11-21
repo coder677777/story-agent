@@ -201,9 +201,11 @@ details.spoil div { margin-top: 6px; color: #C9CDD6; }
 .vbar div { height: 100%; width: 0; background: var(--hl); transition: width .2s; }
 .vresult { width: 100%; border-radius: 12px; background: #000; margin-bottom: 8px; }
 #vOut .btn { width: 100%; }
-select.text { padding: 9px 12px; }
+select.text { padding: 9px 12px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 12px; }
+select.text option { background: var(--panel); color: var(--text); }
 .vredo { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .steps li.skip { opacity: .45; }
+.seg.wrap { flex-wrap: wrap; border-radius: 16px; }
 .steps li.skip .ic { border-style: dashed; }
 .vtiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-top: 14px; }
 .vtile { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
@@ -434,6 +436,6 @@ select.text { padding: 9px 12px; }
   </div>
 </div>
 
-<script type="module" src="app.js?v=1.2"></script>
+<script type="module" src="app.js?v=1.3"></script>
 </body>
 </html>
