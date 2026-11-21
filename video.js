@@ -1,8 +1,8 @@
 // Story Agent: Video Studio. Turns a script into a vertical video right in the browser:
 // a plan for the pictures, a voiceover (free Gemini voice), pictures (AI, your own, or text cards),
 // timing, an animated preview, and an MP4 export. Every step shows live progress and logs what happened.
-import { VOICES, VOICE_STYLE, ART_STYLE, artPlanPrompt, clipPrompt, directorPrompt, shotPrompt } from "./prompts.js?v=1.4";
-import { createStage, VOCAB, normalizeDirection } from "./anim3d.js?v=1.4";
+import { VOICES, VOICE_STYLE, ART_STYLE, artPlanPrompt, clipPrompt, directorPrompt, shotPrompt } from "./prompts.js?v=1.5";
+import { createStage, VOCAB, normalizeDirection } from "./anim3d.js?v=1.5";
 
 export function setupVideo(ctx) {
   const { $, $$, LS, log, copy, toast, esc, ask, cfg, GBASE, report, sleep, fmt, Cancelled, openScript } = ctx;
@@ -54,6 +54,7 @@ export function setupVideo(ctx) {
           <div class="row" style="margin-top:14px">
             <div><p class="label">Music</p><div class="seg" id="vMusic"><button data-v="pad">Soft piano pad</button><button data-v="none">None</button><button data-v="mine">My file</button></div></div>
             <div><p class="label">Quality</p><div class="seg" id="vQual"><button data-v="720">720p</button><button data-v="1080">1080p</button></div></div>
+            <div><p class="label">Smoothness</p><div class="seg" id="vFps"><button data-v="60">60 fps</button><button data-v="30">30 fps</button></div></div>
           </div>
           <div class="go" style="margin-top:18px"><button class="btn primary" id="vMake">🎬 Make the video</button><button class="btn hidden" id="vStop">Stop</button></div>
         </div>
@@ -91,7 +92,7 @@ export function setupVideo(ctx) {
   $("#vVoice").innerHTML = Object.entries(VOICES).map(([k, d]) => `<option value="${k}">${k} (${d})</option>`).join("");
 
   // ---------- state
-  const DEF = Object.assign({ voice: "Puck", voiceStyle: VOICE_STYLE, pics: "3d", music: "pad", quality: 720, clipRes: "720p" }, LS.get("videoDefaults", {}));
+  const DEF = Object.assign({ voice: "Puck", voiceStyle: VOICE_STYLE, pics: "3d", music: "pad", quality: 720, clipRes: "720p", fps: 60 }, LS.get("videoDefaults", {}));
   const RATE = { "360p": 0.023, "720p": 0.07 }, PIC_COST = 0.05;
   let cur = null;   // the script
   let vs = null;    // this video's saved state
@@ -105,13 +106,14 @@ export function setupVideo(ctx) {
   function setSeg(id, val) { $$(`#${id} button`).forEach((b) => b.classList.toggle("on", b.dataset.v === String(val))); }
   function bindSeg(id, prop, after) {
     $$(`#${id} button`).forEach((b) => b.onclick = () => {
-      vs[prop] = prop === "quality" ? Number(b.dataset.v) : b.dataset.v;
+      vs[prop] = prop === "quality" || prop === "fps" ? Number(b.dataset.v) : b.dataset.v;
       setSeg(id, vs[prop]); save(); LS.set("videoDefaults", { ...LS.get("videoDefaults", {}), [prop]: vs[prop] }); after?.();
     });
   }
   bindSeg("vPics", "pics", () => { picsHint(); renderTiles(); });
   bindSeg("vMusic", "music", () => { if (vs.music === "mine") $("#vMusicFile").click(); });
   bindSeg("vQual", "quality");
+  bindSeg("vFps", "fps");
   bindSeg("vClipRes", "clipRes", () => picsHint());
   $("#vVoice").onchange = () => { vs.voice = $("#vVoice").value; save(); LS.set("videoDefaults", { ...LS.get("videoDefaults", {}), voice: vs.voice }); };
   $("#vVoiceStyle").onchange = () => { vs.voiceStyle = $("#vVoiceStyle").value.trim() || VOICE_STYLE; save(); };
@@ -225,7 +227,7 @@ export function setupVideo(ctx) {
     $("#vTitle").textContent = script.title;
     $("#vVoice").value = vs.voice;
     $("#vVoiceStyle").value = vs.voiceStyle;
-    setSeg("vPics", vs.pics); setSeg("vMusic", vs.music); setSeg("vQual", vs.quality); setSeg("vClipRes", vs.clipRes);
+    setSeg("vPics", vs.pics); setSeg("vMusic", vs.music); setSeg("vQual", vs.quality); setSeg("vClipRes", vs.clipRes); setSeg("vFps", vs.fps || 60);
     picsHint(); vErr(""); $("#vOut").innerHTML = ""; $("#vExportHint").textContent = "";
     for (const k of Object.keys(media)) { if (media[k].url) URL.revokeObjectURL(media[k].url); delete media[k]; }
     failedClips.clear();
@@ -565,12 +567,17 @@ export function setupVideo(ctx) {
   }
 
   // ---------- free 3D animation
-  let stage = null; const thumbs = {};
+  let stage = null, lite = null, fastPreview = false; const thumbs = {};
   function stage3d(reset) {
     if (stage && (stage.canvas.width !== cv.width || stage.canvas.height !== cv.height)) { stage.dispose(); stage = null; }
     if (!stage) { stage = createStage(cv.width, cv.height); reset = true; vlog(`3D stage ready (${cv.width}x${cv.height})`); }
-    if (reset && vs.direction) stage.setDirection(vs.direction);
+    if (reset && vs.direction) { stage.setDirection(vs.direction); if (lite) { lite.dispose(); lite = null; } }
     return stage;
+  }
+  // a half-resolution stage used only for live preview on computers that can't keep up (export is always full quality)
+  function liteStage() {
+    if (!lite) { lite = createStage(Math.round(cv.width / 2), Math.round(cv.height / 2)); lite.setDirection(vs.direction); }
+    return lite;
   }
   async function thumb3d(i) {
     if (!vs.direction || !vs.timing) return;
@@ -746,6 +753,9 @@ export function setupVideo(ctx) {
     return i % 2 ? { s0: 1.04, s1: 1.12, x0: 0.015, x1: -0.015 } : { s0: 1.12, s1: 1.04, x0: -0.015, x1: 0.015 };
   }
   const ease = (p) => p < 0.5 ? 2 * p * p : 1 - Math.pow(-2 * p + 2, 2) / 2;
+  // effects that look random (shake, film grain) are seeded by the frame time, so preview and export match exactly
+  let R = Math.random;
+  function seeded(n) { let a = (n * 2654435761) >>> 0; return () => { a = (a + 0x6D2B79F5) | 0; let x = Math.imul(a ^ (a >>> 15), 1 | a); x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x; return ((x ^ (x >>> 14)) >>> 0) / 4294967296; }; }
   function cover(el, sc, ox, oy) {
     const W = cv.width, H = cv.height;
     const iw = el.videoWidth || el.width, ih = el.videoHeight || el.height;
@@ -756,14 +766,14 @@ export function setupVideo(ctx) {
   function drawBg(i, p, local, t) {
     const W = cv.width, H = cv.height, s = cur.scenes[i], m = media[i];
     if (m?.kind === "3d" && vs.direction && vs.timing) {
-      const st = stage3d(), dur = vs.timing.scenes[i].dur;
+      const st = playing && fastPreview ? liteStage() : stage3d(), dur = vs.timing.scenes[i].dur;
       let ox = 0, oy = 0;
-      if (has(s, IMPACT) && local < 0.5) { const a = 0.012 * (1 - local / 0.5); ox = (Math.random() - 0.5) * a * W; oy = (Math.random() - 0.5) * a * H; }
+      if (has(s, IMPACT) && local < 0.5) { const a = 0.012 * (1 - local / 0.5); ox = (R() - 0.5) * a * W; oy = (R() - 0.5) * a * H; }
       g.drawImage(st.render(i, Math.min(local, dur), dur), ox - (ox ? W * 0.01 : 0), oy - (oy ? H * 0.01 : 0), W * (ox ? 1.02 : 1), H * (oy ? 1.02 : 1));
     } else if (m) {
       const mo = motion(s, i), e = ease(Math.min(1, Math.max(0, p)));
       let ox = mo.x0 + (mo.x1 - mo.x0) * e, oy = 0;
-      if (has(s, IMPACT) && local < 0.5) { const a = 0.018 * (1 - local / 0.5); ox += (Math.random() - 0.5) * a; oy += (Math.random() - 0.5) * a; }
+      if (has(s, IMPACT) && local < 0.5) { const a = 0.018 * (1 - local / 0.5); ox += (R() - 0.5) * a; oy += (R() - 0.5) * a; }
       cover(m.el, m.kind === "video" ? 1.0 + 0.04 * e : mo.s0 + (mo.s1 - mo.s0) * e, ox, oy);
     } else {
       const pal = MOODS[vs.plan?.mood] || MOODS[moodGuess()] || MOODS.sad;
@@ -797,6 +807,7 @@ export function setupVideo(ctx) {
     return out.map((x) => x.join(" "));
   }
   function draw(t) {
+    R = seeded(Math.floor(t * 240) + 7);
     const W = cv.width, H = cv.height, tm = vs.timing;
     g.setTransform(1, 0, 0, 1, 0, 0); g.globalAlpha = 1; g.fillStyle = "#000"; g.fillRect(0, 0, W, H);
     if (!tm) { bigText("Make the video to see the preview", H / 2, W * 0.055, 800, "#9AA0AD"); return; }
@@ -809,7 +820,7 @@ export function setupVideo(ctx) {
     // vignette + grain
     const vg = g.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.75);
     vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,0.55)"); g.fillStyle = vg; g.fillRect(0, 0, W, H);
-    if (grain) { g.globalAlpha = 0.05; g.drawImage(grain, -Math.random() * 128, -Math.random() * 128, W + 256, H + 256); g.globalAlpha = 1; }
+    if (grain) { g.globalAlpha = 0.05; g.drawImage(grain, -R() * 128, -R() * 128, W + 256, H + 256); g.globalAlpha = 1; }
     if (!ending) {
       if (has(s, REWIND)) {
         g.fillStyle = "rgba(120,160,255,0.10)"; g.fillRect(0, 0, W, H);
@@ -837,9 +848,9 @@ export function setupVideo(ctx) {
 
   // ---------- sound: voice segments, music pad, hit sounds
   let playing = null;
-  function buildAudio(from, out) {
-    const ac = audioCtx(), tm = vs.timing, t0 = ac.currentTime + 0.12, nodes = [];
-    const master = ac.createGain(); master.gain.value = 1; master.connect(out); if (out !== ac.destination) master.connect(ac.destination);
+  function buildAudio(from, out, acIn, offline) {
+    const ac = acIn || audioCtx(), tm = vs.timing, t0 = offline ? 0 : ac.currentTime + 0.12, nodes = [];
+    const master = ac.createGain(); master.gain.value = 1; master.connect(out); if (!offline && out !== ac.destination) master.connect(ac.destination);
     nodes.push(master);
     if (voiceBuf) for (const s of tm.scenes) {
       if (s.a0 == null || s.start + s.dur <= from) continue;
@@ -866,8 +877,14 @@ export function setupVideo(ctx) {
     };
     // Sound from the clips themselves (footsteps, wind, crowd), kept low under the voice
     const cg = ac.createGain(); cg.gain.value = 0.32; cg.connect(master); nodes.push(cg);
-    for (const m of Object.values(media)) {
+    for (const [k, m] of Object.entries(media)) {
       if (m.kind !== "video") continue;
+      if (offline) {
+        const s = tm.scenes[k]; if (!m.abuf || !s || s.start + s.dur <= from) continue;
+        const src = ac.createBufferSource(); src.buffer = m.abuf; src.connect(cg);
+        src.start(t0 + Math.max(0, s.start - from), Math.max(0, from - s.start), Math.min(s.dur, m.abuf.duration)); nodes.push(src);
+        continue;
+      }
       try { if (!m.src) { m.el.muted = false; m.src = ac.createMediaElementSource(m.el); } m.src.connect(cg); nodes.push(m.src); } catch {}
     }
     if (vs.music === "mine" && musicBuf) {
@@ -883,7 +900,7 @@ export function setupVideo(ctx) {
         const st = t0 + c * len - from, chord = prog[c % prog.length];
         for (const n of chord) for (const [type, oct] of [["sine", 0], ["triangle", 12]]) {
           const o = ac.createOscillator(), e = ac.createGain();
-          o.type = type; o.frequency.value = 440 * Math.pow(2, (n + oct - 69) / 12); o.detune.value = (Math.random() - 0.5) * 8;
+          o.type = type; o.frequency.value = 440 * Math.pow(2, (n + oct - 69) / 12); o.detune.value = (((c * 7 + n) % 5) - 2) * 2;
           const a = Math.max(ac.currentTime, st);
           e.gain.setValueAtTime(0, a); e.gain.linearRampToValueAtTime(type === "sine" ? 0.5 : 0.12, a + 0.9); e.gain.linearRampToValueAtTime(0, st + len + 0.6);
           o.connect(e); e.connect(lp); o.start(a); o.stop(st + len + 0.7); nodes.push(o, e);
@@ -927,11 +944,21 @@ export function setupVideo(ctx) {
     stopPlay();
     const ac = audioCtx(); ac.resume();
     const a = buildAudio(from, out || ac.destination);
-    playing = { a, from, raf: 0 };
+    playing = { a, from, raf: 0, slow: 0, frames: 0 };
     const tick = () => {
       if (!playing) return;
       const t = from + Math.max(0, ac.currentTime - a.t0);
+      const d0 = performance.now();
       syncVideos(t); draw(t); clock(t); seekT = t;
+      const dt = performance.now() - d0; playing.frames++;
+      if (!fastPreview && out == null && vs.pics === "3d") {
+        playing.slow = playing.slow * 0.9 + (dt > 30 ? 1 : 0) * 0.1;
+        if (playing.frames > 12 && playing.slow > 0.5) {
+          fastPreview = true;
+          vlog(`Preview was drawing slowly (${dt.toFixed(0)} ms a frame), switched to a lighter preview. The export is still full quality and perfectly smooth.`);
+          $("#vExportHint").textContent = "Preview is running lighter on this computer so it plays smoothly. Export is full quality, every frame rendered.";
+        }
+      }
       if (t >= vs.timing.total) { const cb = onEnd; stopPlay(); seekT = 0; cb?.(); return; }
       playing.raf = requestAnimationFrame(tick);
       playing.onTick?.(t);
@@ -946,7 +973,14 @@ export function setupVideo(ctx) {
     for (const m of Object.values(media)) if (m.kind === "video") m.el.pause();
     $("#vPlay").textContent = "▶ Play";
   }
-  $("#vPlay").onclick = () => { if (playing) stopPlay(); else play(seekT >= (vs.timing?.total || 0) - 0.1 ? 0 : seekT); };
+  $("#vPlay").onclick = async () => {
+    if (playing) { stopPlay(); return; }
+    if (vs.pics === "3d" && vs.direction && vs.timing) {   // build every 3D scene before playing so nothing hitches mid-video
+      const st = stage3d(); $("#vPlay").textContent = "Loading…";
+      for (let i = 0; i < cur.scenes.length; i++) { if (media[i]?.kind === "3d") { st.prepare(i); if (fastPreview) liteStage().prepare(i); } if (i % 3 === 2) await sleep(0); }
+    }
+    play(seekT >= (vs.timing?.total || 0) - 0.1 ? 0 : seekT);
+  };
   $("#vSeek").oninput = () => { stopPlay(); seekT = (Number($("#vSeek").value) / 1000) * vs.timing.total; syncVideos(seekT); draw(seekT); clock(seekT); };
 
   // ---------- export (records the preview in real time)
@@ -955,7 +989,122 @@ export function setupVideo(ctx) {
       if (window.MediaRecorder?.isTypeSupported?.(m)) return m;
     return "";
   }
+  // ---------- frame-perfect export: every frame is drawn at its exact time and encoded, so the video is perfectly
+  // smooth no matter how fast this computer is (a slower computer just takes longer)
+  async function exportFrames() {
+    const fps = vs.fps || 60, W = cv.width, H = cv.height, total = vs.timing.total, N = Math.ceil(total * fps);
+    const { Muxer, ArrayBufferTarget } = await import("./lib/mp4-muxer.mjs");
+    let vcfg = null;
+    const codecs = W >= 1080 ? ["avc1.640032", "avc1.640028", "avc1.4d4028"] : ["avc1.640020", "avc1.4d401f", "avc1.42e01f", "avc1.640028"];
+    outer: for (const codec of codecs) for (const hw of ["prefer-hardware", "no-preference"]) {
+      const c = { codec, width: W, height: H, bitrate: (W >= 1080 ? 12e6 : 7e6) * (fps >= 60 ? 1.4 : 1), framerate: fps, hardwareAcceleration: hw, avc: { format: "avc" } };
+      try { if ((await VideoEncoder.isConfigSupported(c)).supported) { vcfg = c; break outer; } } catch {}
+    }
+    if (!vcfg) throw new Error("NO_WEBCODECS");
+    // Sound: AAC (what Instagram prefers), or Opus if this browser can't make AAC
+    let acfg = null, aMux = null;
+    for (const [c, m] of [[{ codec: "mp4a.40.2", sampleRate: 48000, numberOfChannels: 2, bitrate: 160000 }, "aac"], [{ codec: "opus", sampleRate: 48000, numberOfChannels: 2, bitrate: 160000 }, "opus"]]) {
+      try { if (window.AudioEncoder && (await AudioEncoder.isConfigSupported(c)).supported) { acfg = c; aMux = m; break; } } catch {}
+    }
+    const audioOk = !!acfg;
+    if (!audioOk) throw new Error("NO_WEBCODECS");   // never make a silent video: fall back to live recording
+    vlog(`Frame-perfect export: ${W}x${H}, ${fps} fps, ${N} frames, ${vcfg.codec}, ${aMux.toUpperCase()} sound`);
+    if (aMux === "opus") vlog("This browser can't make AAC sound, so the sound is Opus. If Instagram rejects the file, export from Chrome or Edge on Windows.", true);
+    const muxer = new Muxer({ target: new ArrayBufferTarget(), video: { codec: "avc", width: W, height: H, frameRate: fps },
+      audio: { codec: aMux, numberOfChannels: 2, sampleRate: 48000 }, fastStart: "in-memory", firstTimestampBehavior: "offset" });
+    let encErr = null;
+    // 1) sound: mix the whole soundtrack in one go
+    $("#vExportHint").textContent = "Mixing the sound…";
+    for (const [k, m] of Object.entries(media)) if (m.kind === "video" && !m.abuf) { try { const b = await get(key("m" + k)); if (b) m.abuf = await decode(b); } catch { m.abuf = null; } }
+    const oac = new OfflineAudioContext(2, Math.ceil((total + 0.5) * 48000), 48000);
+    buildAudio(0, oac.destination, oac, true);
+    const mix = await oac.startRendering();
+    if (audioOk) {
+      const aenc = new AudioEncoder({ output: (c, meta) => muxer.addAudioChunk(c, meta), error: (e) => { encErr = e; } });
+      aenc.configure(acfg);
+      const L = mix.getChannelData(0), Rt = mix.getChannelData(1);
+      for (let i = 0; i < mix.length; i += 1024) {
+        const n = Math.min(1024, mix.length - i), data = new Float32Array(n * 2);
+        data.set(L.subarray(i, i + n), 0); data.set(Rt.subarray(i, i + n), n);
+        const ad = new AudioData({ format: "f32-planar", sampleRate: 48000, numberOfFrames: n, numberOfChannels: 2, timestamp: Math.round((i / 48000) * 1e6), data });
+        aenc.encode(ad); ad.close();
+      }
+      await aenc.flush(); aenc.close();
+    }
+    // 2) picture: every frame at its exact time
+    const venc = new VideoEncoder({ output: (c, meta) => muxer.addVideoChunk(c, meta), error: (e) => { encErr = e; } });
+    venc.configure(vcfg);
+    for (const m of Object.values(media)) if (m.kind === "video") m.el.pause();
+    const t0 = performance.now();
+    // Background tabs slow down timers, so wait with message ports and encoder events instead (they keep full speed)
+    const yieldUI = () => new Promise((r) => { const ch = new MessageChannel(); ch.port1.onmessage = () => r(); ch.port2.postMessage(0); });
+    const drain = () => new Promise((r) => { let done = false; const f = () => { if (!done) { done = true; r(); } }; venc.addEventListener?.("dequeue", f, { once: true }); yieldUI().then(() => { if (venc.encodeQueueSize <= 8) f(); }); });
+    for (let n = 0; n < N; n++) {
+      if (run.cancelled) { try { venc.close(); } catch {} throw new Cancelled(); }
+      if (encErr) throw encErr;
+      const t = n / fps;
+      await seekVideos(t);
+      draw(t);
+      const vf = new VideoFrame(cv, { timestamp: Math.round((n * 1e6) / fps), duration: Math.round(1e6 / fps) });
+      venc.encode(vf, { keyFrame: n % (fps * 2) === 0 }); vf.close();
+      while (venc.encodeQueueSize > 8) await drain();
+      if (n % 4 === 0) {
+        const el = (performance.now() - t0) / 1000, rate = (n + 1) / Math.max(el, 0.001), left = (N - n - 1) / Math.max(rate, 0.1);
+        $("#vBar").style.width = `${((n + 1) / N) * 100}%`;
+        $("#vExportHint").textContent = `Frame ${n + 1} of ${N} · ${rate.toFixed(0)} frames/sec · about ${fmt(left * 1000)} left. Keep this tab open (other tabs and apps are fine).`;
+        await yieldUI();
+      }
+    }
+    await venc.flush(); venc.close();
+    if (encErr) throw encErr;
+    muxer.finalize();
+    vlog(`Rendered ${N} frames in ${fmt(performance.now() - t0)} (${(N / ((performance.now() - t0) / 1000)).toFixed(0)} frames/sec)`);
+    return new Blob([muxer.target.buffer], { type: "video/mp4" });
+  }
+  async function seekVideos(t) {
+    const tm = vs.timing, waits = [];
+    for (const [k, m] of Object.entries(media)) {
+      if (m.kind !== "video") continue;
+      const s = tm.scenes[k]; if (!s || t < s.start || t >= s.start + s.dur) continue;
+      const target = Math.min(Math.max(0, t - s.start), (m.el.duration || 99) - 0.04);
+      if (Math.abs(m.el.currentTime - target) < 0.002) continue;
+      waits.push(new Promise((res) => { const done = () => { m.el.removeEventListener("seeked", done); res(); }; m.el.addEventListener("seeked", done); setTimeout(done, 1500); m.el.currentTime = target; }));
+    }
+    if (waits.length) await Promise.all(waits);
+  }
   $("#vExport").onclick = async () => {
+    if (run) return;
+    if (window.VideoEncoder && window.VideoFrame && window.OfflineAudioContext) {
+      stopPlay();
+      run = { t0: Date.now(), cancelled: false, abort: null };
+      $("#vMake").disabled = true; $("#vExport").disabled = true; $("#vStop").classList.remove("hidden"); vErr("");
+      $("#vOut").innerHTML = ""; $("#vBarWrap").classList.remove("hidden"); $("#vBar").style.width = "0";
+      let fallback = false;
+      try {
+        const blob = await exportFrames();
+        showResult(blob, "mp4");
+        $("#vExportHint").textContent = "Done. Every frame rendered, so it plays perfectly smooth. Watch it once before you post.";
+      } catch (e) {
+        if (e instanceof Cancelled) { vlog("Export stopped"); $("#vExportHint").textContent = "Export stopped."; }
+        else if (e?.message === "NO_WEBCODECS") { fallback = true; vlog("This browser can't encode MP4 frame by frame, using live recording instead", true); }
+        else { vErr(`Export failed: ${e.message || e}`); vlog(`Export failed: ${e.message || e}`, true); }
+      } finally {
+        $("#vBarWrap").classList.add("hidden");
+        run = null; $("#vMake").disabled = false; $("#vExport").disabled = false; $("#vStop").classList.add("hidden");
+      }
+      if (!fallback) return;
+    }
+    return exportRealtime();
+  };
+  function showResult(blob, ext) {
+    const url = URL.createObjectURL(blob);
+    const name = `${cur.title.replace(/[^\w\- ]+/g, "").trim() || "story"} - Part ${cur.part}.${ext}`;
+    $("#vOut").innerHTML = `<video src="${url}" controls playsinline class="vresult"></video>
+      <a class="btn primary" href="${url}" download="${esc(name)}">⬇️ Download ${ext.toUpperCase()} (${(blob.size / 1e6).toFixed(1)} MB)</a>
+      ${ext === "webm" ? `<p class="hint">This browser saved WebM. Instagram wants MP4: export from Chrome or Edge on your PC to get MP4.</p>` : ""}`;
+    vlog(`Export done: ${name}, ${(blob.size / 1e6).toFixed(1)} MB`);
+  }
+  async function exportRealtime() {
     if (run) return;
     const mime = pickMime();
     if (!mime) { vErr("This browser can't record video. Use Chrome or Edge on your PC."); return; }

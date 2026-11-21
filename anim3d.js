@@ -1066,7 +1066,7 @@ export function createStage(W, H) {
       try { S = buildShot(dir, sh, i); } catch (e) { console.warn("shot", i, e); S = buildShot(dir, { set: "void", characters: [] }, i); }
       S.rand2 = (rng(hash("cam" + i))() - 0.5) * 0.5;
       shots.set(i, S);
-      if (shots.size > 6) { const old = shots.keys().next().value; if (old !== i) disposeShot(shots.get(old)), shots.delete(old); }
+      if (shots.size > 64) { const old = shots.keys().next().value; if (old !== i) disposeShot(shots.get(old)), shots.delete(old); }
     }
     return shots.get(i);
   }
@@ -1089,6 +1089,7 @@ export function createStage(W, H) {
       composer.render();
       return canvas;
     },
+    prepare(i) { if (!dir) return; const S = get(i); try { renderer.compile(S.scene, cam); } catch {} },
     // a still for thumbnails
     snapshot(i, dur, tw = 180) { this.render(i, dur * 0.55, dur); const c = document.createElement("canvas"); c.width = tw; c.height = Math.round(tw * H / W); c.getContext("2d").drawImage(canvas, 0, 0, c.width, c.height); return c.toDataURL("image/jpeg", 0.8); },
     dispose() { for (const S of shots.values()) disposeShot(S); shots.clear(); composer.dispose?.(); renderer.dispose(); },

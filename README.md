@@ -64,8 +64,11 @@ a rewind effect, music and an end card. Press **Play** to watch, then **Export v
 - **Pictures:** **My pictures/clips** (upload a screenshot or a short Roblox recording per scene, free and best-looking),
   **Text cards** (free, moody backgrounds with big captions), or **AI pictures** (needs billing turned on in AI Studio,
   about 3–7¢ a picture, roughly 50¢ a video). You can mix: upload some scenes, leave others as cards.
-- **Export** records in real time, so a 75-second video takes 75 seconds. Keep the tab open and in front. Use Chrome or
-  Edge on your PC to get MP4.
+- **Export is frame-perfect**: every frame is drawn at its exact time and encoded straight into an MP4 (60 fps by default,
+  30 fps for a faster export), so it plays perfectly smooth on any computer. A slower computer only takes longer; the
+  progress bar shows the frame count and time left. Keep the tab open (other tabs and apps are fine). Use Chrome or Edge.
+- **Preview** builds every 3D scene before it plays. If your computer can't keep up, the preview switches to a lighter
+  version on its own; the export is always full quality.
 - Voice and pictures are saved in your browser, so you don't spend free voices twice.
 
 ## Stuck or broken?
