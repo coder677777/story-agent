@@ -160,11 +160,31 @@ details.spoil div { margin-top: 6px; color: #C9CDD6; }
 .status { font-size: 14px; margin-top: 8px; min-height: 20px; }
 .status.ok { color: var(--ok); }
 .status.bad { color: #FF8A9F; }
-.loading { text-align: center; }
-.spinner { width: 46px; height: 46px; border-radius: 50%; border: 4px solid var(--panel-2); border-top-color: var(--hl); margin: 8px auto 18px; animation: spin 0.9s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-.loading h2 { font-family: var(--display); font-weight: 800; font-size: 20px; margin: 0; }
-.loading p { color: var(--muted); margin: 6px 0 0; min-height: 24px; }
+.prog-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.prog-top h2 { font-size: 20px; }
+.prog-time { font-family: var(--display); font-weight: 800; color: var(--hl); font-variant-numeric: tabular-nums; }
+.failed .prog-time { color: #FF8A9F; }
+.steps { list-style: none; padding: 0 !important; margin: 16px 0 0; display: flex; flex-direction: column; gap: 2px; }
+.steps li { display: grid; grid-template-columns: 26px 1fr; column-gap: 10px; padding: 7px 0; color: var(--muted); margin: 0 !important; }
+.steps .ic { width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); grid-row: span 2; margin-top: 1px; display: grid; place-items: center; font-size: 12px; font-weight: 800; }
+.steps .lb { font-weight: 600; }
+.steps .sub { font-size: 13px; color: var(--muted); grid-column: 2; overflow-wrap: anywhere; }
+.steps .sub:empty { display: none; }
+.steps li.on { color: var(--text); }
+.steps li.on .ic { border-color: var(--panel-2); border-top-color: var(--hl); animation: spin .9s linear infinite; }
+.steps li.done { color: #C9CDD6; }
+.steps li.done .ic { background: var(--ok); border-color: var(--ok); }
+.steps li.done .ic::after { content: "✓"; color: #15161A; }
+.steps li.bad { color: #FFC2CE; }
+.steps li.bad .ic { background: var(--red); border-color: var(--red); }
+.steps li.bad .ic::after { content: "!"; color: #fff; }
+.prog-hint { font-size: 13px; color: var(--muted); margin: 8px 0 0; min-height: 0; }
+.prog-hint:empty { display: none; }
+.prog-err { background: #3A1E25; border: 1px solid #6B2B3A; color: #FFC2CE; border-radius: 12px; padding: 12px 14px; margin-top: 12px; font-size: 14px; }
+.prog-log { margin-top: 14px; font-size: 13px; }
+.prog-log summary, .logwrap summary { cursor: pointer; color: var(--muted); }
+.prog-log pre, .logwrap pre { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 8px 0 0; max-height: 200px; overflow: auto; font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; color: #C9CDD6; }
 .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--text); color: #15161A; padding: 10px 18px; border-radius: 99px; font-weight: 600; z-index: 60; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
 .err { background: #3A1E25; border: 1px solid #6B2B3A; color: #FFC2CE; border-radius: 12px; padding: 12px 14px; margin-top: 14px; white-space: pre-wrap; }
 
@@ -325,6 +345,11 @@ details.spoil div { margin-top: 6px; color: #C9CDD6; }
       <p class="label" style="margin-top:12px">Gemini model (leave empty for automatic)</p>
       <input class="text" id="modelInput" placeholder="automatic" spellcheck="false">
     </details>
+    <details class="logwrap" id="logDetails" style="margin-top:12px"><summary>Activity log (send this to Claude if something breaks)</summary>
+      <pre id="logBox"></pre>
+      <div style="display:flex;gap:8px;margin-top:8px"><button class="btn small" id="logCopy">📋 Copy report</button><button class="btn small ghost" id="logClear">Clear</button></div>
+    </details>
+    <p class="hint" id="verLabel" style="margin-bottom:0"></p>
     <div class="foot">
       <button class="btn" id="testKey">Test key</button>
       <button class="btn" id="closeSettings">Close</button>
@@ -349,11 +374,26 @@ details.spoil div { margin-top: 6px; color: #C9CDD6; }
   </div>
 </div>
 
-<!-- loading -->
-<div class="veil hidden" id="loading">
-  <div class="modal loading"><div class="spinner"></div><h2 id="loadH">Writing…</h2><p id="loadP"></p></div>
+<!-- progress -->
+<div class="veil hidden" id="progress">
+  <div class="modal prog" role="dialog" aria-modal="true" aria-labelledby="progH" aria-live="polite">
+    <div class="prog-top"><h2 id="progH">Writing…</h2><span class="prog-time" id="progTime">0:00</span></div>
+    <ol class="steps" id="progSteps"></ol>
+    <p class="prog-hint" id="progHint"></p>
+    <div class="prog-err hidden" id="progErr"><b>Stopped here:</b> <span id="progErrMsg"></span></div>
+    <details class="prog-log"><summary>Details (what's happening behind the scenes)</summary><pre id="progLog"></pre></details>
+    <div class="foot" id="progRun">
+      <button class="btn small progCopy">📋 Copy report</button>
+      <button class="btn" id="progCancel">Cancel</button>
+    </div>
+    <div class="foot hidden" id="progDone">
+      <button class="btn progCopy">📋 Copy report for Claude</button>
+      <button class="btn" id="progClose">Close</button>
+      <button class="btn primary" id="progRetry">↻ Try again</button>
+    </div>
+  </div>
 </div>
 
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=1.1"></script>
 </body>
 </html>

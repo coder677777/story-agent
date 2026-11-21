@@ -1,6 +1,6 @@
 import {
   STYLES, TWEAKS, ideasPrompt, ideasFromPromptPrompt, scriptPrompt, nextPartPrompt, tweakPrompt,
-} from "./prompts.js";
+} from "./prompts.js?v=1.1";
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -78,52 +78,225 @@ async function listModels(key) {
 class KeyError extends Error { constructor() { super("Gemini rejected the API key. Check it in Settings (it starts with \"AIza\")."); } }
 class QuotaError extends Error {}
 
-async function gemini(prompt, temperature, onStatus) {
+// ---------- activity log (saved in this browser so you can copy it for Claude)
+const VERSION = "1.1";
+const LOG = LS.get("log", []);
+function log(msg, bad = false) {
+  const line = `${new Date().toLocaleTimeString()}  ${bad ? "✗ " : ""}${msg}`;
+  LOG.push(line);
+  if (LOG.length > 400) LOG.splice(0, LOG.length - 400);
+  LS.set("log", LOG);
+  if (job) {
+    const el = $("#progLog");
+    el.textContent += (el.textContent ? "\n" : "") + line;
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+// ---------- progress window: real steps, a timer, cancel, retry, and a report to copy
+const STEPS = [
+  ["model", "Connect to Gemini"],
+  ["send", "Send your request"],
+  ["think", "AI is thinking"],
+  ["recv", "Writing it out"],
+  ["check", "Check the answer"],
+];
+// How long to wait before giving up on a step (can be changed for testing via localStorage "sa.timeouts")
+const T = Object.assign({ headers: 45e3, first: 150e3, idle: 45e3 }, LS.get("timeouts", {}));
+let job = null;
+const fmt = (ms) => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+class Cancelled extends Error { constructor() { super("CANCELLED"); } }
+
+function startJob(title) {
+  job = { title, t0: Date.now(), stepT: Date.now(), cur: null, cancelled: false, abort: null, err: null };
+  $("#progH").textContent = title;
+  $("#progSteps").innerHTML = STEPS.map(([k, l]) =>
+    `<li data-step="${k}"><span class="ic"></span><span class="lb">${l}</span><span class="sub"></span></li>`).join("");
+  $("#progLog").textContent = "";
+  $("#progHint").textContent = "";
+  hide("#progErr"); show("#progRun"); hide("#progDone");
+  $("#progress").classList.remove("failed");
+  clearInterval(job.tick);
+  job.tick = setInterval(tickJob, 500);
+  tickJob();
+  show("#progress");
+  log(`— ${title}  (Story Agent v${VERSION})`);
+}
+function tickJob() {
+  if (!job || job.err) return;
+  $("#progTime").textContent = fmt(Date.now() - job.t0);
+  const inStep = Date.now() - job.stepT;
+  let hint = "";
+  if (job.cur === "think" && inStep > 25e3) hint = `Long scripts can take Google 1–2 minutes. It gives up and tries another model at ${fmt(T.first)}.`;
+  if (job.cur === "send" && inStep > 15e3) hint = "Google is slow to pick up. Hang on…";
+  $("#progHint").textContent = hint;
+}
+function step(k, sub) {
+  if (!job) return;
+  const keys = STEPS.map((s) => s[0]);
+  const idx = keys.indexOf(k);
+  if (k !== job.cur) { job.cur = k; job.stepT = Date.now(); }
+  keys.forEach((kk, i) => {
+    const li = $(`#progSteps [data-step="${kk}"]`);
+    li.className = i < idx ? "done" : i === idx ? "on" : "";
+  });
+  if (sub !== undefined) stepSub(k, sub);
+}
+function stepSub(k, sub) { const el = job && $(`#progSteps [data-step="${k}"] .sub`); if (el) el.textContent = sub; }
+function endJob() { if (job) clearInterval(job.tick); job = null; hide("#progress"); }
+function cancelJob() { if (!job) return; job.cancelled = true; log("You pressed Cancel"); job.abort?.(); job.onChoice?.("close"); }
+function report() {
+  const label = (STEPS.find((s) => s[0] === job?.cur) || [])[1] || "";
+  const sub = job?.cur ? $(`#progSteps [data-step="${job.cur}"] .sub`)?.textContent : "";
+  return [
+    `Story Agent v${VERSION} report`,
+    `When: ${new Date().toLocaleString()}`,
+    job ? `Task: ${job.title}` : "",
+    job ? `Step: ${label}${sub ? ` (${sub})` : ""} after ${fmt(Date.now() - job.t0)}` : "",
+    job?.err ? `Error: ${job.err.message}` : "",
+    `Browser: ${navigator.userAgent}`,
+    "", "Log:", ...LOG.slice(-60),
+  ].filter((l) => l !== "").join("\n");
+}
+// Show the error in the window and wait for Try again / Close
+function failJob(e) {
+  job.err = e;
+  clearInterval(job.tick);
+  const li = job.cur && $(`#progSteps [data-step="${job.cur}"]`);
+  if (li) li.className = "bad";
+  $("#progress").classList.add("failed");
+  $("#progErrMsg").textContent = e.message || String(e);
+  show("#progErr"); hide("#progRun"); show("#progDone");
+  $("#progHint").textContent = "";
+  log(e.message || String(e), true);
+  return new Promise((res) => { job.onChoice = res; });
+}
+$("#progCancel").onclick = cancelJob;
+$("#progClose").onclick = () => job?.onChoice?.("close");
+$("#progRetry").onclick = () => job?.onChoice?.("retry");
+$$(".progCopy").forEach((b) => b.onclick = () => copy(report(), "Report copied. Paste it to Claude."));
+
+// Read Gemini's streamed answer piece by piece so we can show real progress
+async function readStream(r, watch, unit) {
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let buf = "", out = "", finish = "", blocked = "";
+  const t0 = Date.now();
+  const handle = (line) => {
+    line = line.trim();
+    if (!line.startsWith("data:")) return;
+    let d;
+    try { d = JSON.parse(line.slice(5)); } catch { return; }
+    if (d.error) throw new Error(`Gemini error: ${d.error.message || JSON.stringify(d.error).slice(0, 200)}`);
+    if (d.promptFeedback?.blockReason) blocked = d.promptFeedback.blockReason;
+    const c = d.candidates?.[0];
+    if (c?.finishReason) finish = c.finishReason;
+    const t = (c?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("");
+    if (!t) return;
+    if (!out) { step("recv"); log(`First words arrived after ${Math.round((Date.now() - t0) / 1000)}s of thinking`); }
+    out += t;
+    watch(T.idle, "idle");
+    const n = unit ? (out.match(unit.re) || []).length : 0;
+    stepSub("recv", `${out.length.toLocaleString()} characters${unit ? ` · ${n} ${unit.label}` : ""}`);
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) { handle(buf.slice(0, i)); buf = buf.slice(i + 1); }
+  }
+  handle(buf);
+  log(`Finished: ${out.length.toLocaleString()} characters, reason ${finish || "none given"}`);
+  if (blocked) throw new Error(`Google blocked this request (${blocked}). Try rewording your prompt.`);
+  if (finish === "MAX_TOKENS") throw new Error("The answer got cut off because it was too long. Press Try again, or pick a shorter video length.");
+  if (finish && !["STOP", "FINISH_REASON_UNSPECIFIED"].includes(finish)) throw new Error(`Gemini stopped early (reason: ${finish}). Try again or reword your prompt.`);
+  if (!out.trim()) throw new Error("Gemini sent back an empty answer. Press Try again.");
+  return out;
+}
+
+async function gemini(prompt, temperature, unit) {
   if (!cfg.key) throw new Error("NO_KEY");
+  step("model", "Checking your key…");
   for (const [m, t] of Object.entries(doneToday)) if (Date.now() - t > 6 * 3600e3) delete doneToday[m];
   const avail = await listModels(cfg.key);
   let order = [...new Set([LS.get("goodModel", ""), cfg.model.trim(), ...avail].filter(Boolean))];
   order = order.filter((m) => !doneToday[m]).length ? order.filter((m) => !doneToday[m]) : order;
+  log(`Models to try: ${order.slice(0, 4).join(", ")}${order.length > 4 ? "…" : ""}`);
+  stepSub("model", `${order.length} models ready`);
   const body = JSON.stringify({
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: { responseMimeType: "application/json", temperature },
   });
-  let limited = false, gone = [];
+  let limited = false, gone = [], slow = [];
   for (const m of order) {
     let minuteWaits = 0;
     for (let attempt = 1; attempt <= 5; attempt++) {
+      if (job?.cancelled) throw new Cancelled();
+      step("send", m + (attempt > 1 ? ` (try ${attempt})` : ""));
+      log(`Sending to ${m}${attempt > 1 ? ` (try ${attempt})` : ""}`);
+      const ctrl = new AbortController();
+      let timer, why = "";
+      const watch = (ms, w) => { clearTimeout(timer); timer = setTimeout(() => { why = w; ctrl.abort(); }, ms); };
+      job.abort = () => ctrl.abort();
+      watch(T.headers, "headers");
       let r;
       try {
-        r = await fetch(`${GBASE}models/${m}:generateContent?key=${encodeURIComponent(cfg.key)}`,
-          { method: "POST", headers: { "Content-Type": "application/json" }, body });
+        r = await fetch(`${GBASE}models/${m}:streamGenerateContent?alt=sse&key=${encodeURIComponent(cfg.key)}`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body, signal: ctrl.signal });
       } catch {
-        if (attempt >= 4) throw new Error("Couldn't reach Gemini. Check your internet and try again.");
-        onStatus?.("Connection hiccup, retrying…"); await sleep(4000 * attempt); continue;
+        clearTimeout(timer);
+        if (job?.cancelled) throw new Cancelled();
+        if (why) { log(`${m} didn't pick up within ${T.headers / 1000}s`, true); slow.push(m); break; }
+        log(`Couldn't reach Google (try ${attempt})`, true);
+        if (attempt >= 4) throw new Error("Couldn't reach Google's AI. Check your internet and press Try again.");
+        stepSub("send", "Connection hiccup, retrying…"); await sleep(4000 * attempt); continue;
       }
+      log(`${m} replied: HTTP ${r.status}`);
       if (r.ok) {
-        const data = await r.json();
-        const parts = data?.candidates?.[0]?.content?.parts;
-        if (!parts) throw new Error("Gemini didn't return any text (it may have blocked the request). Try rewording your prompt.");
-        LS.set("goodModel", m);
-        return parts.filter((p) => !p.thought).map((p) => p.text || "").join("");
+        step("think", "Waiting for the first words…");
+        watch(T.first, "first");
+        try {
+          const text = await readStream(r, watch, unit);
+          clearTimeout(timer);
+          LS.set("goodModel", m);
+          return text;
+        } catch (e) {
+          clearTimeout(timer);
+          if (job?.cancelled) throw new Cancelled();
+          if (why === "first") { log(`${m} thought for ${T.first / 1000}s without writing anything. Trying the next model.`, true); slow.push(m); break; }
+          if (why === "idle") { log(`${m} stopped mid-answer for ${T.idle / 1000}s. Trying the next model.`, true); slow.push(m); break; }
+          if (e.name === "AbortError" || e.name === "TypeError") {
+            log(`Connection dropped while ${m} was answering`, true);
+            if (attempt >= 3) { slow.push(m); break; }
+            await sleep(2000); continue;
+          }
+          throw e;
+        }
       }
+      clearTimeout(timer);
       const detail = await r.text();
       const low = detail.toLowerCase();
+      log(`Google said: ${detail.replace(/\s+/g, " ").slice(0, 220)}`, true);
       if (r.status === 429) {
         const daily = /per ?day|perday|requestsperday/.test(low) || /limit:\s*0\b/.test(low);
-        if (daily || minuteWaits >= 2) { doneToday[m] = Date.now(); LS.set("doneToday", doneToday); limited = true; break; }
+        if (daily || minuteWaits >= 2) { doneToday[m] = Date.now(); LS.set("doneToday", doneToday); limited = true; log(`${m} is out of free uses for today`); break; }
         const d = parseInt((detail.match(/"retryDelay":\s*"(\d+)/) || [])[1] || "20", 10);
         minuteWaits++;
-        for (let s = Math.min(Math.max(d, 5), 60) + 2; s > 0; s--) { onStatus?.(`Gemini's free tier is catching its breath… ${s}s`); await sleep(1000); }
+        for (let s = Math.min(Math.max(d, 5), 60) + 2; s > 0; s--) {
+          if (job?.cancelled) throw new Cancelled();
+          stepSub("send", `Free tier limit, waiting ${s}s…`); await sleep(1000);
+        }
         continue;
       }
-      if (r.status >= 500) { if (attempt >= 3) break; onStatus?.("Gemini is busy, retrying…"); await sleep(5000 * attempt); continue; }
+      if (r.status >= 500) { if (attempt >= 3) break; stepSub("send", "Google is busy, retrying…"); await sleep(5000 * attempt); continue; }
       if (r.status === 404 || (r.status === 400 && low.includes("model") && /not found|not supported|not available|deprecated|no longer/.test(low))) { gone.push(m); break; }
       if ([400, 401, 403].includes(r.status) && (low.includes("api key") || low.includes("api_key") || low.includes("permission"))) throw new KeyError();
       throw new Error(`Gemini error ${r.status}: ${detail.slice(0, 240)}`);
     }
   }
-  if (limited) throw new QuotaError("Your free Gemini key has used up today's requests. Google resets them at midnight Pacific (2 AM in Texas).");
+  if (limited && !slow.length) throw new QuotaError("Your free Gemini key has used up today's requests. Google resets them at midnight Pacific (2 AM in Texas).");
+  if (slow.length) throw new Error(`Google's AI was too slow to answer (${slow.join(", ")}). Press Try again in a minute.`);
   throw new Error(`None of Gemini's models answered${gone.length ? ` (${gone.join(", ")} unavailable)` : ""}. Try again in a minute, or set a model in Settings > Advanced.`);
 }
 
@@ -134,7 +307,7 @@ function manualAnswer(prompt, why) {
     $("#manStatus").textContent = "";
     show("#manual");
     $("#manCopy").onclick = () => copy(prompt + "\n\nReply with the JSON only.", "Prompt copied. Paste it into Claude.");
-    $("#manCancel").onclick = () => { hide("#manual"); reject(new Error("CANCELLED")); };
+    $("#manCancel").onclick = () => { hide("#manual"); reject(new Cancelled()); };
     $("#manUse").onclick = () => {
       const t = $("#manAnswer").value.trim();
       try { parseJSON(t); } catch { $("#manStatus").textContent = "That doesn't look like the full answer. Copy everything Claude wrote, including the { } brackets."; return; }
@@ -143,38 +316,39 @@ function manualAnswer(prompt, why) {
   });
 }
 
-async function ask(prompt, { temperature = 0.85, title = "Writing…" } = {}) {
-  if (cfg.provider === "manual") return parseJSON(await manualAnswer(prompt, "You chose \"Paste from Claude\" in Settings."));
-  if (!cfg.key) { openSettings("Add your free Gemini key first (or switch to \"Paste from Claude\")."); throw new Error("CANCELLED"); }
-  startLoading(title);
-  try {
-    return parseJSON(await gemini(prompt, temperature, (s) => { $("#loadP").textContent = s; }));
-  } catch (e) {
-    if (e instanceof QuotaError) { stopLoading(); return parseJSON(await manualAnswer(prompt, e.message + " You can still finish this one with Claude:")); }
-    throw e;
-  } finally { stopLoading(); }
+// unit: what to count while it writes, e.g. scenes. norm: turns the answer into ideas/script (its errors show in "Check the answer").
+async function ask(prompt, { temperature = 0.85, title = "Writing…", unit = null, norm = (d) => d } = {}) {
+  if (cfg.provider === "manual") return norm(parseJSON(await manualAnswer(prompt, "You chose \"Paste from Claude\" in Settings.")));
+  if (!cfg.key) { openSettings("Add your free Gemini key first (or switch to \"Paste from Claude\")."); throw new Cancelled(); }
+  for (;;) {
+    startJob(title);
+    try {
+      const text = await gemini(prompt, temperature, unit);
+      step("check", "Reading the answer…");
+      const out = norm(parseJSON(text));
+      log(`Done in ${fmt(Date.now() - job.t0)}`);
+      endJob();
+      return out;
+    } catch (e) {
+      if (e instanceof Cancelled || job?.cancelled) { endJob(); throw new Cancelled(); }
+      if (e instanceof QuotaError) { log(e.message, true); endJob(); return norm(parseJSON(await manualAnswer(prompt, e.message + " You can still finish this one with Claude:"))); }
+      if (e instanceof KeyError) { log(e.message, true); endJob(); openSettings(e.message); throw new Cancelled(); }
+      if (e?.message === "NO_KEY") { endJob(); throw e; }
+      const choice = await failJob(e);
+      if (choice === "retry") { log("You pressed Try again"); continue; }
+      endJob(); throw new Cancelled();
+    }
+  }
 }
 
 function parseJSON(text) {
   const t = String(text).replace(/^```(?:json)?\s*|\s*```\s*$/g, "").trim();
   try { return JSON.parse(t); } catch {}
   const a = t.indexOf("{"), b = t.lastIndexOf("}");
-  if (a >= 0 && b > a) return JSON.parse(t.slice(a, b + 1));
-  throw new Error("The AI's answer wasn't readable. Press the button again.");
+  if (a >= 0 && b > a) { try { return JSON.parse(t.slice(a, b + 1)); } catch {} }
+  throw new Error("The AI's answer wasn't readable (it may have been cut off). Press Try again.");
 }
 
-// ---------- loading overlay
-const LOAD_LINES = ["Inventing a strange town rule…", "Hiding clues in the background…", "Planting the twist…",
-  "Making Grandpa nod at the right moment…", "Writing the line that makes people rewatch…", "Timing the music drop…"];
-let loadT;
-function startLoading(title) {
-  $("#loadH").textContent = title;
-  let i = 0; $("#loadP").textContent = LOAD_LINES[0];
-  clearInterval(loadT);
-  loadT = setInterval(() => { i = (i + 1) % LOAD_LINES.length; $("#loadP").textContent = LOAD_LINES[i]; }, 2600);
-  show("#loading");
-}
-function stopLoading() { clearInterval(loadT); hide("#loading"); }
 function show(s) { $(s).classList.remove("hidden"); }
 function hide(s) { $(s).classList.add("hidden"); }
 
@@ -187,6 +361,8 @@ function showError(where, e) {
 }
 
 // ---------- normalizing AI output
+const UNIT_SCENES = { re: /"vo"\s*:/g, label: "scenes" };
+const UNIT_IDEAS = { re: /"twist"\s*:/g, label: "ideas" };
 function normIdeas(d) {
   const arr = Array.isArray(d) ? d : d.ideas || [];
   return arr.filter((x) => x && (x.title || x.hook)).map((x) => ({
@@ -266,8 +442,8 @@ async function getIdeas(more = false) {
       (more && avoid.length ? `\nDo NOT reuse these earlier ideas: ${avoid.map((t) => `"${t}"`).join(", ")}.` : "")
     : ideasPrompt({ style: source.style, count: state.count, theme: source.theme, avoid });
   try {
-    const ideas = normIdeas(await ask(prompt, { temperature: 1.0, title: "Coming up with ideas…" }));
-    if (!ideas.length) throw new Error("No ideas came back. Press the button again.");
+    const ideas = await ask(prompt, { temperature: 1.0, title: "Coming up with ideas…", unit: UNIT_IDEAS,
+      norm: (d) => { const x = normIdeas(d); if (!x.length) throw new Error("No ideas came back. Press Try again."); return x; } });
     state.ideas = more ? [...ideas, ...state.ideas].slice(0, 30) : ideas;
     state.ideasSource = source;
     state.seen = [...new Set([...state.seen, ...ideas.map((i) => i.title)])].slice(-80);
@@ -299,8 +475,8 @@ async function writeFromIdea(idea) {
   const style = state.ideasSource?.style || state.style;
   const { id, ...clean } = idea;
   try {
-    const s = normScript(await ask(scriptPrompt({ style, idea: clean, length: state.length }), { temperature: 0.8, title: `Writing “${idea.title}”…` }),
-      { style, series: idea.title, source: { idea: clean } });
+    const s = await ask(scriptPrompt({ style, idea: clean, length: state.length }), { temperature: 0.8, title: `Writing “${idea.title}”…`, unit: UNIT_SCENES,
+      norm: (d) => normScript(d, { style, series: idea.title, source: { idea: clean } }) });
     saveScript(s); openScript(s.id);
   } catch (e) { showError("#homeErr", e); }
 }
@@ -309,8 +485,8 @@ async function writeFromPrompt() {
   const text = $("#promptText").value.trim();
   if (!text) { showError("#homeErr", new Error("Paste a comment or idea first.")); return; }
   try {
-    const s = normScript(await ask(scriptPrompt({ style: state.style, text, length: state.length }), { temperature: 0.8, title: "Writing your script…" }),
-      { style: state.style, source: { prompt: text } });
+    const s = await ask(scriptPrompt({ style: state.style, text, length: state.length }), { temperature: 0.8, title: "Writing your script…", unit: UNIT_SCENES,
+      norm: (d) => normScript(d, { style: state.style, source: { prompt: text } }) });
     saveScript(s); openScript(s.id);
   } catch (e) { showError("#homeErr", e); }
 }
@@ -404,9 +580,9 @@ async function tweak(askText) {
   const s = state.current;
   try {
     const { prev, source, ...plain } = s;
-    const n = normScript(await ask(tweakPrompt({ style: s.style, script: plain, ask: askText }), { temperature: 0.8, title: "Rewriting…" }),
-      { id: s.id, created: s.created, style: s.style, series: s.series, part: s.part, source: s.source,
-        prev: [...s.prev, plain].slice(-5) });
+    const n = await ask(tweakPrompt({ style: s.style, script: plain, ask: askText }), { temperature: 0.8, title: "Rewriting…", unit: UNIT_SCENES,
+      norm: (d) => normScript(d, { id: s.id, created: s.created, style: s.style, series: s.series, part: s.part, source: s.source,
+        prev: [...s.prev, plain].slice(-5) }) });
     n.part = s.part;
     saveScript(n); state.current = n; renderScript(); toast("Updated. Press Undo to go back.");
   } catch (e) { if (e?.message !== "CANCELLED") toast(e.message || String(e)); }
@@ -426,8 +602,8 @@ $("#nextPart").onclick = async () => {
   if (note === null) return;
   try {
     const { prev, source, ...plain } = s;
-    const n = normScript(await ask(nextPartPrompt({ style: s.style, script: plain, length: s.length, note: note.trim() }), { temperature: 0.85, title: `Writing Part ${s.part + 1}…` }),
-      { style: s.style, series: s.series, part: s.part + 1, source: { after: s.id } });
+    const n = await ask(nextPartPrompt({ style: s.style, script: plain, length: s.length, note: note.trim() }), { temperature: 0.85, title: `Writing Part ${s.part + 1}…`, unit: UNIT_SCENES,
+      norm: (d) => normScript(d, { style: s.style, series: s.series, part: s.part + 1, source: { after: s.id } }) });
     n.part = s.part + 1;
     n.series = s.series;
     saveScript(n); openScript(n.id);
@@ -471,6 +647,11 @@ function openSettings(msg) {
   setTimeout(() => $("#keyInput").focus(), 50);
 }
 $("#openSettings").onclick = () => openSettings();
+function renderLog() { $("#logBox").textContent = LOG.length ? LOG.slice(-150).join("\n") : "Nothing yet."; }
+$("#logDetails").ontoggle = renderLog;
+$("#logCopy").onclick = () => copy(report(), "Report copied. Paste it to Claude.");
+$("#logClear").onclick = () => { LOG.length = 0; LS.set("log", LOG); renderLog(); };
+$("#verLabel").textContent = "Story Agent v" + VERSION;
 $("#closeSettings").onclick = () => hide("#settings");
 $$("#provSeg button").forEach((b) => b.onclick = () => $$("#provSeg button").forEach((x) => x.classList.toggle("on", x === b)));
 $("#saveSettings").onclick = () => {

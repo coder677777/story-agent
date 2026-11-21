@@ -40,6 +40,13 @@ The key stays in your browser and only goes to Google.
 If the free key runs out for the day, the site gives you a prompt to paste into Claude and a box to paste
 the answer back. You can also pick **Paste from Claude** in Settings to always work that way.
 
+## Stuck or broken?
+
+While it works, a window shows each step live: connect → send → AI is thinking → writing it out (with a running
+count of scenes) → check the answer, plus a timer. If Google doesn't answer in time it stops on its own, marks the
+step in red, and says why. Press **Copy report for Claude** and paste it to Claude. It has the step, the error and a
+log of what happened (never your key). The same log is in **Settings → Activity log**.
+
 ## Changing the formula
 
 Everything the AI is told lives in `prompts.js`. Send Claude your analytics and it can tune the formula there;
