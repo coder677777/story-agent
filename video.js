@@ -1,7 +1,8 @@
 // Story Agent: Video Studio. Turns a script into a vertical video right in the browser:
 // a plan for the pictures, a voiceover (free Gemini voice), pictures (AI, your own, or text cards),
 // timing, an animated preview, and an MP4 export. Every step shows live progress and logs what happened.
-import { VOICES, VOICE_STYLE, ART_STYLE, artPlanPrompt, clipPrompt } from "./prompts.js?v=1.3";
+import { VOICES, VOICE_STYLE, ART_STYLE, artPlanPrompt, clipPrompt, directorPrompt, shotPrompt } from "./prompts.js?v=1.4";
+import { createStage, VOCAB, normalizeDirection } from "./anim3d.js?v=1.4";
 
 export function setupVideo(ctx) {
   const { $, $$, LS, log, copy, toast, esc, ask, cfg, GBASE, report, sleep, fmt, Cancelled, openScript } = ctx;
@@ -45,7 +46,7 @@ export function setupVideo(ctx) {
           <p class="hint">Free with your Gemini key: about 10 voices a day. Each video uses 1.</p>
 
           <p class="label" style="margin-top:16px">Pictures</p>
-          <div class="seg wrap" id="vPics"><button data-v="clips">🎬 AI video clips</button><button data-v="ai">AI pictures</button><button data-v="mine">My pictures/clips</button><button data-v="cards">Text cards</button></div>
+          <div class="seg wrap" id="vPics"><button data-v="3d">🧊 3D animation (free)</button><button data-v="clips">🎬 AI video clips</button><button data-v="ai">AI pictures</button><button data-v="mine">My pictures/clips</button><button data-v="cards">Text cards</button></div>
           <p class="hint" id="vPicsHint"></p>
           <div id="vClipOpts" class="hidden"><p class="label" style="margin-top:12px">Clip quality</p>
             <div class="seg" id="vClipRes"><button data-v="360p">360p draft (~2¢/sec)</button><button data-v="720p">720p (~7¢/sec)</button></div></div>
@@ -90,7 +91,7 @@ export function setupVideo(ctx) {
   $("#vVoice").innerHTML = Object.entries(VOICES).map(([k, d]) => `<option value="${k}">${k} (${d})</option>`).join("");
 
   // ---------- state
-  const DEF = Object.assign({ voice: "Puck", voiceStyle: VOICE_STYLE, pics: "cards", music: "pad", quality: 720, clipRes: "720p" }, LS.get("videoDefaults", {}));
+  const DEF = Object.assign({ voice: "Puck", voiceStyle: VOICE_STYLE, pics: "3d", music: "pad", quality: 720, clipRes: "720p" }, LS.get("videoDefaults", {}));
   const RATE = { "360p": 0.023, "720p": 0.07 }, PIC_COST = 0.05;
   let cur = null;   // the script
   let vs = null;    // this video's saved state
@@ -120,6 +121,11 @@ export function setupVideo(ctx) {
       const secs = vs.timing ? vs.timing.scenes.reduce((a, s) => a + clipSecs(s.dur), 0) : cur.scenes.length * 5;
       $("#vPicsHint").textContent = `Real moving animation, the closest to @pov.deadlinestories. Each scene gets a picture, then Google animates it. ` +
         `Paid on your Google key (billing must be on): about $${(secs * RATE[vs.clipRes] + cur.scenes.length * PIC_COST).toFixed(2)} for this video. You'll confirm before anything is charged.`;
+      return;
+    }
+    if (vs.pics === "3d") {
+      $("#vPicsHint").textContent = "Free. The AI directs every scene (cast, set, acting, camera, lighting, effects) and your computer animates it in 3D. " +
+        "Characters look identical in every shot. Press 🧊 Redo shot on any scene to re-direct just that one, or upload your own picture/clip over it.";
       return;
     }
     $("#vPicsHint").textContent = {
@@ -213,7 +219,7 @@ export function setupVideo(ctx) {
     vs = Object.assign({ ...DEF, plan: null, voiceSrc: null, timing: null, media: {}, stamp: script.updated }, LS.get("video." + script.id, {}));
     if (vs.stamp !== script.updated) {
       vlog("The script changed since last time, so the voice and timing will be redone.");
-      vs.plan = null; vs.voiceSrc = null; vs.timing = null; vs.stamp = script.updated; await del(key("voice")); save();
+      vs.plan = null; vs.direction = null; vs.voiceSrc = null; vs.timing = null; vs.stamp = script.updated; await del(key("voice")); save();
     }
     $("#vPart").textContent = "PART " + script.part;
     $("#vTitle").textContent = script.title;
@@ -223,6 +229,8 @@ export function setupVideo(ctx) {
     picsHint(); vErr(""); $("#vOut").innerHTML = ""; $("#vExportHint").textContent = "";
     for (const k of Object.keys(media)) { if (media[k].url) URL.revokeObjectURL(media[k].url); delete media[k]; }
     failedClips.clear();
+    for (const k of Object.keys(thumbs)) delete thumbs[k];
+    if (stage) { stage.dispose(); stage = null; }
     voiceBuf = null;
     await loadMedia();
     const vb = await get(key("voice"));
@@ -232,11 +240,13 @@ export function setupVideo(ctx) {
     refreshSteps();
     renderTiles();
     await prepPlayer();
+    if (vs.pics === "3d" && vs.direction && vs.timing) { for (let i = 0; i < cur.scenes.length; i++) if (media[i]?.kind === "3d") { await thumb3d(i); await sleep(5); } }
   }
   function vlogReset() { $("#vLog").textContent = ""; }
   function refreshSteps() {
     const needPlan = vs.pics === "ai" || vs.pics === "clips";
-    vstep("plan", !needPlan ? "skip" : vs.plan ? "done" : "", !needPlan ? "Only needed for AI pictures or clips" : vs.plan ? `${vs.plan.scenes.length} picture ideas` : "");
+    if (vs.pics === "3d") vstep("plan", vs.direction ? "done" : "", vs.direction ? `Directed: ${vs.direction.shots.length} shots, ${vs.direction.cast.length} characters` : "The AI directs every shot (free)");
+    else vstep("plan", !needPlan ? "skip" : vs.plan ? "done" : "", !needPlan ? "Only needed for AI pictures or clips" : vs.plan ? `${vs.plan.scenes.length} picture ideas` : "");
     vstep("voice", voiceBuf ? "done" : "", voiceBuf ? `${fmt(voiceBuf.duration * 1000)} · ${vs.voiceSrc}` : "");
     const n = cur.scenes.filter((_, i) => media[i]).length, nc = cur.scenes.filter((_, i) => media[i]?.kind === "video").length;
     vstep("pics", n || vs.pics === "cards" ? "done" : "", `${n} of ${cur.scenes.length} scenes have a picture or clip${nc ? ` (${nc} moving)` : ""}${n < cur.scenes.length ? ", the rest become text cards" : ""}`);
@@ -251,20 +261,33 @@ export function setupVideo(ctx) {
     $("#vPicCount").textContent = `${n}/${cur.scenes.length} with pictures`;
     $("#vTiles").innerHTML = cur.scenes.map((s, i) => {
       const m = media[i];
-      const thumb = m ? (m.kind === "video" ? `<video src="${m.url}#t=0.5" muted playsinline preload="metadata"></video>` : `<img src="${m.url}" alt="">`)
+      const thumb = m?.kind === "3d" ? (thumbs[i] ? `<img src="${thumbs[i]}" alt="">` : `<div class="ph">🧊 ${esc(vs.direction?.shots?.[i]?.set || "3D")}</div>`)
+        : m ? (m.kind === "video" ? `<video src="${m.url}#t=0.5" muted playsinline preload="metadata"></video>` : `<img src="${m.url}" alt="">`)
         : `<div class="ph">${esc(s.visual || "Text card")}</div>`;
       return `<div class="vtile" data-i="${i}">
         <div class="vthumb">${thumb}<span class="vnum">${i + 1}</span><span class="vst${failedClips.has(i) ? " bad" : ""}" data-st="${i}">${failedClips.has(i) ? "clip failed" : m?.kind === "video" && vs.pics === "clips" ? "🎬" : ""}</span></div>
         <p class="vvo">${esc(s.vo || "(no voiceover)")}</p>
         <div class="vbtns">
-          <button class="btn small" data-up="${i}">⬆ ${m ? "Replace" : "Upload"}</button>
+          <button class="btn small" data-up="${i}">⬆ ${m && m.kind !== "3d" ? "Replace" : "Upload"}</button>
+          ${vs.pics === "3d" && vs.direction ? `<button class="btn small" data-redo3d="${i}" title="Re-direct this shot">🧊 Redo shot</button>` : ""}
           ${vs.pics === "ai" || vs.pics === "clips" ? `<button class="btn small" data-ai="${i}" title="Make an AI picture for this scene">✨ Pic</button>` : ""}
           ${vs.pics === "clips" ? `<button class="btn small" data-clip="${i}" title="Animate this scene into a video clip">🎬 Clip</button>` : ""}
-          ${m ? `<button class="btn small ghost" data-rm="${i}" title="Remove">✕</button>` : ""}
+          ${m && m.kind !== "3d" ? `<button class="btn small ghost" data-rm="${i}" title="Remove">✕</button>` : ""}
         </div></div>`;
     }).join("");
     $$("[data-up]").forEach((b) => b.onclick = () => { pickFor = Number(b.dataset.up); $("#vFile").value = ""; $("#vFile").click(); });
-    $$("[data-rm]").forEach((b) => b.onclick = async () => { const i = Number(b.dataset.rm); await del(key("m" + i)); delete vs.media[i]; save(); dropMedia(i); renderTiles(); refreshSteps(); });
+    $$("[data-rm]").forEach((b) => b.onclick = async () => { const i = Number(b.dataset.rm); await del(key("m" + i)); delete vs.media[i]; save(); dropMedia(i); if (vs.pics === "3d" && vs.direction) media[i] = { kind: "3d" }; renderTiles(); refreshSteps(); });
+    $$("[data-redo3d]").forEach((b) => b.onclick = () => runJob(async () => {
+      const i = Number(b.dataset.redo3d);
+      const note = prompt(`What should change in shot ${i + 1}? (optional, e.g. "closer on Grandpa's face", "make it night", "he hugs her")`, "");
+      if (note === null) throw new Cancelled();
+      vstep("plan", "on", `Re-directing shot ${i + 1}`);
+      const shot = await ask(shotPrompt({ script: cur, direction: vs.direction, i, note: note.trim(), vocab: VOCAB }), { temperature: 0.8, title: `Re-directing shot ${i + 1}…`,
+        norm: (d) => { const s2 = d.shot || d; if (!s2 || !s2.set) throw new Error("The new shot came back empty. Press Try again."); return s2; } });
+      shot.i = i; vs.direction.shots[i] = shot; vs.direction = normalizeDirection(vs.direction); save();
+      vlog(`Shot ${i + 1} re-directed: ${shot.set}, ${shot.camera?.shot || ""} ${shot.camera?.move || ""}${note.trim() ? ` ("${note.trim()}")` : ""}`);
+      stage3d(true); await thumb3d(i); vstep("plan", "done", `Shot ${i + 1} updated`); await prepPlayer();
+    }));
     $$("[data-ai]").forEach((b) => b.onclick = () => runJob(async () => { await ensurePlan(); await genImage(Number(b.dataset.ai), true); }));
     $$("[data-clip]").forEach((b) => b.onclick = () => runJob(async () => {
       const i = Number(b.dataset.clip);
@@ -288,7 +311,10 @@ export function setupVideo(ctx) {
     await loadOne(pickFor, f, kind); vlog(`Scene ${pickFor + 1}: you added a ${kind} (${(f.size / 1e6).toFixed(1)} MB)`);
     renderTiles(); refreshSteps();
   };
-  async function loadMedia() { for (const [i, kind] of Object.entries(vs.media)) { const b = await get(key("m" + i)); if (b) await loadOne(Number(i), b, kind); else delete vs.media[i]; } }
+  async function loadMedia() {
+    for (const [i, kind] of Object.entries(vs.media)) { const b = await get(key("m" + i)); if (b) await loadOne(Number(i), b, kind); else delete vs.media[i]; }
+    if (vs.pics === "3d" && vs.direction) cur.scenes.forEach((_, i) => { if (!media[i]) media[i] = { kind: "3d" }; });
+  }
   async function loadOne(i, blob, kind) {
     dropMedia(i);
     const url = URL.createObjectURL(blob);
@@ -344,7 +370,29 @@ export function setupVideo(ctx) {
   async function makeAll() {
     vlog(`— Make the video: "${cur.title}" part ${cur.part} (pictures: ${vs.pics}, voice: ${vs.voice})`);
     vstep("timing", "", ""); vstep("ready", "", "");
-    if (vs.pics === "clips") {
+    if (vs.pics === "3d") {
+      if (!voiceBuf) await makeVoice(); else vlog("Voice already recorded, keeping it (remove it with ↻ Redo voice)");
+      await computeTiming();
+      if (!vs.direction) {
+        vstep("plan", "on", "The AI is directing every shot: cast, sets, acting, camera…");
+        vs.direction = await ask(directorPrompt({ script: cur, durations: vs.timing.scenes.map((s) => s.dur), vocab: VOCAB }), { temperature: 0.7, title: "Directing the 3D scenes…",
+          unit: { re: /"camera"\s*:/g, label: "shots" },
+          norm: (d) => { const n = normalizeDirection(d); if (!n.shots.length) throw new Error("The AI's shot list came back empty. Press Try again."); return n; } });
+        save();
+        vlog(`Directed ${vs.direction.shots.length} shots with ${vs.direction.cast.length} characters: ${vs.direction.cast.map((c) => c.name || c.id).join(", ")}`);
+      }
+      vstep("plan", "done", `Directed: ${vs.direction.shots.length} shots, ${vs.direction.cast.length} characters`);
+      vstep("pics", "on", "Building the 3D scenes…");
+      stage3d(true);
+      for (let i = 0; i < cur.scenes.length; i++) {
+        if (run.cancelled) throw new Cancelled();
+        if (!media[i] || media[i].kind === "3d") media[i] = { kind: "3d" };
+        $(`#vSteps [data-step="pics"]`).dataset.base = `Building scene ${i + 1} of ${cur.scenes.length}`;
+        await thumb3d(i); await sleep(10);
+      }
+      renderTiles();
+      vstep("pics", "done", `${cur.scenes.length} animated 3D scenes`);
+    } else if (vs.pics === "clips") {
       if (!voiceBuf) await makeVoice(); else vlog("Voice already recorded, keeping it (remove it with ↻ Redo voice)");
       await computeTiming();
       const todo = cur.scenes.map((_, i) => i).filter((i) => media[i]?.kind !== "video");
@@ -371,7 +419,7 @@ export function setupVideo(ctx) {
       vstep("pics", failed.length ? "bad" : "done", `${made} clips made (~$${spent.toFixed(2)})${failed.length ? `. Failed: scene ${failed.join(", ")}. Press 🎬 Clip on those to retry.` : ""}`);
     } else if (vs.pics === "ai") await ensurePlan();
     if (!voiceBuf) await makeVoice();
-    else if (vs.pics !== "clips") vlog("Voice already recorded, keeping it (remove it with ↻ Redo voice)");
+    else if (vs.pics !== "clips" && vs.pics !== "3d") vlog("Voice already recorded, keeping it (remove it with ↻ Redo voice)");
     if (vs.pics === "ai") {
       vstep("pics", "on", "Starting…");
       let made = 0;
@@ -383,7 +431,7 @@ export function setupVideo(ctx) {
         renderTiles();
       }
       vstep("pics", "done", `${made} new AI pictures`);
-    } else if (vs.pics !== "clips") refreshSteps();
+    } else if (vs.pics !== "clips" && vs.pics !== "3d") refreshSteps();
     await computeTiming();
     await prepPlayer();
     vstep("ready", "done", "Press Play to watch, then Export");
@@ -514,6 +562,22 @@ export function setupVideo(ctx) {
     }
     tileStatus(i, "failed", true);
     throw new Error(`Couldn't make a picture for scene ${i + 1}. ${lastErr}`);
+  }
+
+  // ---------- free 3D animation
+  let stage = null; const thumbs = {};
+  function stage3d(reset) {
+    if (stage && (stage.canvas.width !== cv.width || stage.canvas.height !== cv.height)) { stage.dispose(); stage = null; }
+    if (!stage) { stage = createStage(cv.width, cv.height); reset = true; vlog(`3D stage ready (${cv.width}x${cv.height})`); }
+    if (reset && vs.direction) stage.setDirection(vs.direction);
+    return stage;
+  }
+  async function thumb3d(i) {
+    if (!vs.direction || !vs.timing) return;
+    try { thumbs[i] = stage3d().snapshot(i, vs.timing.scenes[i].dur); }
+    catch (e) { vlog(`Scene ${i + 1}: 3D preview failed (${e.message})`, true); }
+    const img = $(`.vtile[data-i="${i}"] .vthumb`);
+    if (img && thumbs[i]) { img.querySelector("img, .ph, video")?.remove(); img.insertAdjacentHTML("afterbegin", `<img src="${thumbs[i]}" alt="">`); }
   }
 
   // ---------- AI video clips (Gemini Omni through the Interactions API)
@@ -691,7 +755,12 @@ export function setupVideo(ctx) {
   }
   function drawBg(i, p, local, t) {
     const W = cv.width, H = cv.height, s = cur.scenes[i], m = media[i];
-    if (m) {
+    if (m?.kind === "3d" && vs.direction && vs.timing) {
+      const st = stage3d(), dur = vs.timing.scenes[i].dur;
+      let ox = 0, oy = 0;
+      if (has(s, IMPACT) && local < 0.5) { const a = 0.012 * (1 - local / 0.5); ox = (Math.random() - 0.5) * a * W; oy = (Math.random() - 0.5) * a * H; }
+      g.drawImage(st.render(i, Math.min(local, dur), dur), ox - (ox ? W * 0.01 : 0), oy - (oy ? H * 0.01 : 0), W * (ox ? 1.02 : 1), H * (oy ? 1.02 : 1));
+    } else if (m) {
       const mo = motion(s, i), e = ease(Math.min(1, Math.max(0, p)));
       let ox = mo.x0 + (mo.x1 - mo.x0) * e, oy = 0;
       if (has(s, IMPACT) && local < 0.5) { const a = 0.018 * (1 - local / 0.5); ox += (Math.random() - 0.5) * a; oy += (Math.random() - 0.5) * a; }
@@ -736,7 +805,7 @@ export function setupVideo(ctx) {
     if (i < 0) i = ending ? tm.scenes.length - 1 : 0;
     const sc = tm.scenes[i], local = ending ? sc.dur : Math.max(0, t - sc.start), p = local / sc.dur, s = cur.scenes[i];
     drawBg(i, p, local, t);
-    if (!ending && i > 0 && local < 0.22) { g.globalAlpha = 1 - local / 0.22; drawBg(i - 1, 1, 9, t); g.globalAlpha = 1; }
+    if (!ending && i > 0 && local < 0.22 && media[i]?.kind !== "3d" && media[i - 1]?.kind !== "3d") { g.globalAlpha = 1 - local / 0.22; drawBg(i - 1, 1, 9, t); g.globalAlpha = 1; }
     // vignette + grain
     const vg = g.createRadialGradient(W / 2, H / 2, H * 0.3, W / 2, H / 2, H * 0.75);
     vg.addColorStop(0, "rgba(0,0,0,0)"); vg.addColorStop(1, "rgba(0,0,0,0.55)"); g.fillStyle = vg; g.fillRect(0, 0, W, H);
@@ -937,9 +1006,9 @@ export function setupVideo(ctx) {
   };
 
   // redo buttons
-  $("#vSteps").insertAdjacentHTML("afterend", `<div class="vredo"><button class="btn small ghost" id="vRedoVoice">↻ Redo voice</button><button class="btn small ghost" id="vRedoPlan">↻ Redo picture plan</button></div>`);
+  $("#vSteps").insertAdjacentHTML("afterend", `<div class="vredo"><button class="btn small ghost" id="vRedoVoice">↻ Redo voice</button><button class="btn small ghost" id="vRedoPlan">↻ Redo plan / 3D direction</button></div>`);
   $("#vRedoVoice").onclick = async () => { if (run) return; await del(key("voice")); voiceBuf = null; vs.voiceSrc = null; vs.timing = null; save(); refreshSteps(); await prepPlayer(); runJob(async () => { await makeVoice(); await computeTiming(); await prepPlayer(); refreshSteps(); }); };
-  $("#vRedoPlan").onclick = () => { if (run) return; vs.plan = null; save(); refreshSteps(); toast("The plan will be redone next time you make AI pictures."); };
+  $("#vRedoPlan").onclick = () => { if (run) return; vs.plan = null; vs.direction = null; save(); refreshSteps(); toast("The plan / 3D direction will be redone next time you press Make the video."); };
 
   $("#vBack").onclick = () => { stop(); openScript(cur.id); };
   function stop() { stopPlay(); if (run) { run.cancelled = true; run.abort?.(); } }

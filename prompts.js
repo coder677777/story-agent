@@ -257,3 +257,74 @@ Keep the exact same characters, colors, lighting and blocky low-poly 3D animated
 expressive animation like a polished animated short. Vertical 9:16. Nobody talks and mouths stay closed.
 No on-screen text, captions, subtitles or logos. Sound: natural ambient sound effects only, no music, no voices.`;
 }
+
+// ---------- free 3D animation: the AI acts as director and writes one shot per scene
+function vocabText(V) {
+  return Object.entries(V).map(([k, v]) => `${k}: ${v.join(", ")}`).join("\n");
+}
+const SHOT_SHAPE = `{"i": 0,
+ "set": "one of sets", "time": "one of times", "weather": "one of weather", "mood_light": "one of moods",
+ "characters": [{"id": "cast id", "pos": "one of positions", "pose": "one of poses", "facing": "camera | left | right | away | <another cast id>",
+   "action": "one of actions (hug:<id> / tap_shoulder:<id> name who)", "expression": "one of expressions", "holding": "one of holding"}],
+ "props": ["from props"],
+ "camera": {"shot": "one of shots", "target": "cast id the camera follows", "move": "one of moves"},
+ "fx": ["from fx (ghost:<id> names who)"]}`;
+
+export function directorPrompt({ script, durations, vocab }) {
+  const scenes = (script.scenes || []).map((s, i) => ({ i, seconds: Number(durations?.[i] || 3).toFixed(1), vo: s.vo, visual: s.visual, camera: s.camera, text: s.text, sound: s.sound, clue: s.clue }));
+  return `You are the director and animator of a vertical (9:16) animated short made in a blocky low-poly 3D style:
+cube-headed characters with simple cartoon faces, toy-like sets, cinematic lighting. A narrator speaks over every shot,
+so characters never talk. You turn each scene of the script into exactly one animated shot.
+
+Story: ${script.title}
+Twist: ${script.twist}
+Scenes (seconds = how long the shot lasts):
+${JSON.stringify(scenes, null, 1)}
+
+ALLOWED VALUES (use only these words, exactly as written):
+${vocabText(vocab)}
+
+RULES
+- CAST: define every recurring character once in "cast". Give each one a fixed look that stays identical in every shot:
+  id (short lowercase), name, age, skin (hex), hair {style, color hex}, shirt (hex), pants (hex), shoes (hex),
+  extra (space separated words from extras, or "none"), chest_button ("red", "grey" or "none": only if the story is
+  about a button or a glowing mark on the chest). Make main characters easy to tell apart (different shirt colors and hair).
+  Old people: age "elder", grey or white hair. Use varied, natural skin tones.
+- Every shot has 1-3 characters (only who matters). Unnamed townspeople can be added to cast as extras (e.g. "neighbor1").
+- Keep places consistent: if the story stays in one place for several scenes, reuse the same set, time and weather.
+- Match the action to the narration of that scene (someone presses, kicks, cries, hugs, walks in, looks around...).
+  The expression must match the feeling of the line.
+- CAMERA like a real animated film: start with an establishing or wide shot, then mix wide, medium, close and over_shoulder.
+  Close or extreme_close on the most emotional lines and on reactions. Low_angle for power or danger, high_angle for small
+  or lonely moments. Prefer slow moves (push_in, pull_out, orbit, pan) and handheld for tension. Never use the same
+  shot type 3 times in a row.
+- Use fx to show the story's magic and clues: glow_button when a button matters, button_grey once it is used, rewind for
+  time going back, ghost:<id> for spirits, spotlight or silhouette for dramatic reveals, tears for crying, crowd_cheer at
+  games, flatline at a hospital death, rain or snow for sad moods, sparkles or god_rays for wonder, slowmo for the big moment,
+  freeze when time stops. A kick at a goal: add "ball" to props and "ball_hits_post" (miss) or "goal_scored".
+- For in-mirror stories use set "bathroom", the person inside the mirror at pos "in_mirror" with fx "ghost:<id>",
+  and the person looking at it at pos "mirror" facing "away".
+- Sitting: pos "bench", "bed", "chair", "sofa" or "stands" with pose "sit". Sleeping or dying: pos "bed", pose "lie".
+
+Return JSON only:
+{"cast": [{"id": "...", "name": "...", "age": "...", "skin": "#...", "hair": {"style": "...", "color": "#..."}, "shirt": "#...",
+  "pants": "#...", "shoes": "#...", "extra": "...", "chest_button": "..."}],
+ "shots": [${SHOT_SHAPE}]}
+Write exactly ${scenes.length} shots, with "i" from 0 to ${scenes.length - 1}.`;
+}
+
+export function shotPrompt({ script, direction, i, note, vocab }) {
+  const s = script.scenes[i];
+  return `You are the director of a blocky low-poly 3D animated short. Rewrite ONE shot.
+Cast (keep exactly): ${JSON.stringify(direction.cast)}
+Previous shot: ${JSON.stringify(direction.shots[i - 1] || null)}
+Current shot: ${JSON.stringify(direction.shots[i])}
+Next shot: ${JSON.stringify(direction.shots[i + 1] || null)}
+Scene ${i}: narration "${s.vo}". Visual idea: ${s.visual}. Camera idea: ${s.camera}. Clue: ${s.clue || "none"}.
+${note ? `The user wants: "${note}".` : "Make it more cinematic and emotional than the current shot."}
+
+ALLOWED VALUES (use only these):
+${vocabText(vocab)}
+
+Return JSON only, one shot: ${SHOT_SHAPE.replace('"i": 0', `"i": ${i}`)}`;
+}

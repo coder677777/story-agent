@@ -48,6 +48,14 @@ a rewind effect, music and an end card. Press **Play** to watch, then **Export v
 
 - **Voice:** free with your Gemini key (about 10 a day; each video uses 1). Pick a voice and say how it should sound.
   Out of free voices? Press **Use my own recording** and upload an MP3.
+- **🧊 3D animation (free, the default)**: the AI directs every scene (who's in it, the set, what they do, their face,
+  the camera shot and move, lighting, weather, effects) and your computer animates it in blocky low-poly 3D. Each character
+  is defined once, so they look identical in every shot. 18 sets (street, park, house, bedroom, bathroom with a mirror world,
+  kitchen, classroom, school hall, stadium with crowd, hospital with heart monitor, attic, night road, forest, graveyard,
+  store, rooftop, beach, dream void), day/sunset/night/dawn, rain/snow/fog, 35+ actions (walk, run, kick, cry, hug,
+  press the chest button, cheer, fall...), 15 expressions with blinking, and camera moves (push-in, orbit, handheld,
+  crane...). Press **🧊 Redo shot** on any scene and say what to change. Upload your own picture or clip over any scene.
+  Needs a computer with a normal graphics chip; keep the tab in front while exporting.
 - **🎬 AI video clips** (closest to @pov.deadlinestories): each scene gets a consistent picture, then Google's video model
   animates it into a moving clip. Paid on your Gemini key with billing on: about 7¢ a second at 720p (about $5 for a
   75-second video) or about 2¢ a second as a 360p draft. It shows the price and asks before charging. A failed scene keeps
@@ -72,4 +80,4 @@ log of what happened (never your key). The same log is in **Settings → Activit
 Everything the AI is told lives in `prompts.js`. Send Claude your analytics and it can tune the formula there;
 the site updates a minute after the change is pushed.
 
-Fonts: Poppins (SIL Open Font License).
+Fonts: Poppins (SIL Open Font License). 3D: three.js (MIT, in lib/three).
