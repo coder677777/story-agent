@@ -878,7 +878,7 @@ export function setupVideo(ctx) {
         if (Math.floor(t * 2) % 2 === 0) bigText("◀◀", H * 0.08, W * 0.07, 900, "#fff");
       }
       if (has(s, IMPACT) && local < 0.16) { g.fillStyle = `rgba(255,255,255,${0.55 * (1 - local / 0.16)})`; g.fillRect(0, 0, W, H); }
-      if (s.text) { const pop = Math.min(1, local / 0.18); bigText(s.text, H * 0.2, W * 0.115, 900, "#FFE500", 0.7 + 0.3 * ease(pop)); }
+      if (s.text && !/^\s*(empty( string)?|none|null|n\/?a|blank|no text|-+|—)\s*$/i.test(s.text)) { const pop = Math.min(1, local / 0.18); bigText(s.text, H * 0.2, W * 0.115, 900, "#FFE500", 0.7 + 0.3 * ease(pop)); }
       // captions follow the actual spoken words (times come from lining up the voice)
       const caps = sc.caps || [];
       let cap = null;

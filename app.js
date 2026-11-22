@@ -389,7 +389,7 @@ function normScript(d, extra = {}) {
     hook: s.hook || s.scenes[0]?.vo || "",
     scenes: s.scenes.map((x) => ({
       time: x.time || "", visual: x.visual || "", camera: x.camera || "", vo: x.vo || "",
-      text: x.text || "", sound: x.sound || "", clue: x.clue || "",
+      text: /^\s*(empty( string)?|none|null|n\/?a|blank|no text|-+|—)\s*$/i.test(x.text || "") ? "" : (x.text || ""), sound: x.sound || "", clue: x.clue || "",
     })),
     clues: Array.isArray(s.clues) ? s.clues : [],
     twist: s.twist || "", ending_text: s.ending_text || "", caption: s.caption || "",
