@@ -834,6 +834,7 @@ const tmpV = new THREE.Vector3(), tmpV2 = new THREE.Vector3();
 function facingYaw(c, shot, S) {
   const f = String(c.cs.facing || "camera");
   if (f.startsWith("other:") || S.byId.has(f)) { const o = S.byId.get(f.replace("other:", "")); if (o) return cheat(Math.atan2(o.root.position.x - c.root.position.x, o.root.position.z - c.root.position.z), 0.4); }
+  if (/^-?\d+(\.\d+)?$/.test(f)) return (Number(f) * PI) / 180;   // an exact angle in degrees (0 = toward camera)
   if (c.anchor.rotY != null && f === "camera") return c.anchor.rotY;
   return { camera: 0, left: -PI / 2, right: PI / 2, away: PI, back: PI }[f] ?? 0;
 }
