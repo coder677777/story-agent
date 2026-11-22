@@ -90,7 +90,7 @@ export const SCRIPT_SHAPE = `Return JSON only, shaped like this:
     "visual": "what we see: setting, characters, action",
     "camera": "shot type and movement, e.g. close-up push-in, wide, over-the-shoulder",
     "vo": "the narrator's exact words for this scene",
-    "text": "short on-screen text or label beyond the captions (e.g. 'YEAR 29', 'DAY 7', 'CLANG'), or empty",
+    "text": "short on-screen text or label beyond the captions (e.g. 'YEAR 29', 'DAY 7', 'CLANG'), or \"\" (nothing) when there is no label",
     "sound": "music and sound effects",
     "clue": "the hidden clue planted in this scene, or empty"
   }],
