@@ -202,19 +202,23 @@ function compact(s) {
 // ---------- video: voice + pictures
 // How the narrator should sound. Gemini's voices follow plain-English directions.
 // How the narrator should sound. Sent separately from the words, so it is never read out loud. Keep it short.
-export const VOICE_STYLE = "quiet and emotional, like a 12-year-old telling a true story, natural pauses, softer near the end";
+export const VOICE_STYLE = "quick and lively, like a 12-year-old telling a true story, light young voice, short pauses";
+export const OLD_VOICE_STYLES = ["quiet and emotional, like a 12-year-old telling a true story, natural pauses, softer near the end"];
 
 // Gemini voices that suit young storytelling (name: description)
 export const VOICES = {
-  Puck: "young, upbeat",
-  Leda: "youthful, soft",
+  Leda: "youthful",
+  Zephyr: "bright",
+  Puck: "upbeat",
+  Laomedeia: "upbeat",
+  Sadachbia: "lively",
+  Autonoe: "bright",
+  Aoede: "breezy",
   Achird: "friendly",
   Fenrir: "excitable",
-  Aoede: "breezy",
-  Kore: "firm, clear",
+  Kore: "firm",
   Sulafat: "warm",
-  Enceladus: "breathy, intimate",
-  Charon: "deep, narrator",
+  Charon: "deep",
 };
 
 // The look of every AI picture

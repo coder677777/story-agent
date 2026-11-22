@@ -46,6 +46,8 @@ On any script press **🎬 Make the video**. It records the voiceover, gets a pi
 and builds a vertical video with slow camera moves, big captions, on-screen labels, a hit sound on impact moments,
 a rewind effect, music and an end card. Press **Play** to watch, then **Export video** to download an MP4.
 
+- **Speed and Pitch sliders** reshape the recorded voice instantly (faster without sounding squeaky, higher so it's less deep).
+  They don't use a new recording, and the captions re-sync on their own. **▶ Hear the voice** plays the first few seconds.
 - **Captions match the voice**: after recording, the site finds every pause in the voice and matches each sentence and comma to
   it, so each caption appears when its words are spoken.
 - **Voice:** free with your Gemini key (about 10 a day; each video uses 1). Pick a voice and say how it should sound.

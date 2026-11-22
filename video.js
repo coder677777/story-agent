@@ -1,9 +1,10 @@
 // Story Agent: Video Studio. Turns a script into a vertical video right in the browser:
 // a plan for the pictures, a voiceover (free Gemini voice), pictures (AI, your own, or text cards),
 // timing, an animated preview, and an MP4 export. Every step shows live progress and logs what happened.
-import { VOICES, VOICE_STYLE, ART_STYLE, artPlanPrompt, clipPrompt, directorPrompt, shotPrompt } from "./prompts.js?v=1.6";
-import { createStage, VOCAB, normalizeDirection } from "./anim3d.js?v=1.6";
-import { alignVoice } from "./align.js?v=1.6";
+import { VOICES, VOICE_STYLE, OLD_VOICE_STYLES, ART_STYLE, artPlanPrompt, clipPrompt, directorPrompt, shotPrompt } from "./prompts.js?v=1.7";
+import { createStage, VOCAB, normalizeDirection } from "./anim3d.js?v=1.7";
+import { alignVoice } from "./align.js?v=1.7";
+import { changeVoice } from "./voicefx.js?v=1.7";
 
 export function setupVideo(ctx) {
   const { $, $$, LS, log, copy, toast, esc, ask, cfg, GBASE, report, sleep, fmt, Cancelled, openScript } = ctx;
@@ -42,7 +43,12 @@ export function setupVideo(ctx) {
             <select class="text" id="vVoice" style="width:auto"></select>
             <button class="btn small" id="vVoiceUp">⬆ Use my own recording</button>
           </div>
-          <p class="label" style="margin-top:14px">How it should sound</p>
+          <div class="row" style="margin-top:14px">
+            <div><p class="label">Speed <b id="vSpeedV"></b></p><input type="range" class="vrange" id="vSpeed" min="0.85" max="1.5" step="0.05"></div>
+            <div><p class="label">Pitch <b id="vPitchV"></b></p><input type="range" class="vrange" id="vPitch" min="-3" max="4" step="0.5"></div>
+          </div>
+          <div style="margin-top:8px"><button class="btn small" id="vHear" disabled>▶ Hear the voice</button> <span class="hint" style="margin-left:6px">Changes are instant and free: no new recording.</span></div>
+          <p class="label" style="margin-top:14px">How it should sound (for new recordings)</p>
           <input class="text" id="vVoiceStyle" maxlength="200" placeholder="e.g. quiet, emotional, like a kid telling a true story">
           <p class="hint">Free with your Gemini key: about 10 voices a day. Each video uses 1.</p>
 
@@ -93,14 +99,14 @@ export function setupVideo(ctx) {
   $("#vVoice").innerHTML = Object.entries(VOICES).map(([k, d]) => `<option value="${k}">${k} (${d})</option>`).join("");
 
   // ---------- state
-  const DEF = Object.assign({ voice: "Puck", voiceStyle: VOICE_STYLE, pics: "3d", music: "pad", quality: 720, clipRes: "720p", fps: 60 }, LS.get("videoDefaults", {}));
+  const DEF = Object.assign({ voice: "Leda", speed: 1.12, pitch: 1, voiceStyle: VOICE_STYLE, pics: "3d", music: "pad", quality: 720, clipRes: "720p", fps: 60 }, LS.get("videoDefaults", {}));
   const RATE = { "360p": 0.023, "720p": 0.07 }, PIC_COST = 0.05;
   let cur = null;   // the script
   let vs = null;    // this video's saved state
   let run = null;   // the job that's running
   const media = {}; // scene index -> { kind, el, url }
   const failedClips = new Set();
-  let voiceBuf = null, musicBuf = null;
+  let voiceBuf = null, rawVoice = null, musicBuf = null;
   const key = (k) => `${cur.id}:${k}`;
   const save = () => LS.set("video." + cur.id, vs);
 
@@ -228,7 +234,9 @@ export function setupVideo(ctx) {
     $("#vTitle").textContent = script.title;
     $("#vVoice").value = vs.voice;
     if (!vs.voiceStyle || /^Read this like a kid/.test(vs.voiceStyle)) { vs.voiceStyle = VOICE_STYLE; save(); }
+    if (OLD_VOICE_STYLES.includes(vs.voiceStyle)) { vs.voiceStyle = VOICE_STYLE; save(); }
     $("#vVoiceStyle").value = vs.voiceStyle;
+    $("#vSpeed").value = vs.speed ?? 1; $("#vPitch").value = vs.pitch ?? 0; fxLabels();
     setSeg("vPics", vs.pics); setSeg("vMusic", vs.music); setSeg("vQual", vs.quality); setSeg("vClipRes", vs.clipRes); setSeg("vFps", vs.fps || 60);
     picsHint(); vErr(""); $("#vOut").innerHTML = ""; $("#vExportHint").textContent = "";
     for (const k of Object.keys(media)) { if (media[k].url) URL.revokeObjectURL(media[k].url); delete media[k]; }
@@ -238,11 +246,12 @@ export function setupVideo(ctx) {
     voiceBuf = null;
     await loadMedia();
     const vb = await get(key("voice"));
-    if (vb) { try { voiceBuf = await decode(vb); } catch { vs.voiceSrc = null; } }
+    if (vb) { try { await setVoice(await decode(vb)); } catch { vs.voiceSrc = null; } }
     if (voiceBuf && vs.voiceSrc && vs.voiceSrc !== "your recording" && !vs.voiceV) {
       vlog("This voice was recorded the old way (the style instructions got read out loud at the start). It will be re-recorded when you press Make the video.", true);
-      await del(key("voice")); voiceBuf = null; vs.voiceSrc = null; vs.timing = null; save();
+      await del(key("voice")); voiceBuf = null; rawVoice = null; vs.voiceSrc = null; vs.timing = null; save();
     }
+    if (voiceBuf && vs.timing && vs.timing.fx !== fxKey()) { vlog("Re-syncing captions for the current speed and pitch"); await computeTiming(); }
     if (voiceBuf && vs.timing && !vs.timing.scenes.some((s) => s.caps)) { vlog("Re-lining up the captions with the voice (new, more accurate timing)"); await computeTiming(); }
     const mb = await get("music:file"); musicBuf = null;
     if (mb) { try { musicBuf = await decode(mb); } catch {} }
@@ -256,7 +265,8 @@ export function setupVideo(ctx) {
     const needPlan = vs.pics === "ai" || vs.pics === "clips";
     if (vs.pics === "3d") vstep("plan", vs.direction ? "done" : "", vs.direction ? `Directed: ${vs.direction.shots.length} shots, ${vs.direction.cast.length} characters` : "The AI directs every shot (free)");
     else vstep("plan", !needPlan ? "skip" : vs.plan ? "done" : "", !needPlan ? "Only needed for AI pictures or clips" : vs.plan ? `${vs.plan.scenes.length} picture ideas` : "");
-    vstep("voice", voiceBuf ? "done" : "", voiceBuf ? `${fmt(voiceBuf.duration * 1000)} · ${vs.voiceSrc}` : "");
+    vstep("voice", voiceBuf ? "done" : "", voiceBuf ? `${fmt(voiceBuf.duration * 1000)} · ${vs.voiceSrc} · ${Number(vs.speed ?? 1).toFixed(2)}x` : "");
+    $("#vHear").disabled = !voiceBuf;
     const n = cur.scenes.filter((_, i) => media[i]).length, nc = cur.scenes.filter((_, i) => media[i]?.kind === "video").length;
     vstep("pics", n || vs.pics === "cards" ? "done" : "", `${n} of ${cur.scenes.length} scenes have a picture or clip${nc ? ` (${nc} moving)` : ""}${n < cur.scenes.length ? ", the rest become text cards" : ""}`);
     vstep("timing", vs.timing && voiceBuf ? "done" : "", vs.timing && voiceBuf ? `${fmt(vs.timing.total * 1000)} total` : "");
@@ -342,7 +352,7 @@ export function setupVideo(ctx) {
   $("#vVoiceUp").onclick = () => { $("#vAudioFile").value = ""; $("#vAudioFile").click(); };
   $("#vAudioFile").onchange = async () => {
     const f = $("#vAudioFile").files[0]; if (!f) return;
-    try { voiceBuf = await decode(f); } catch { toast("That audio file couldn't be opened. Try an MP3 or WAV."); return; }
+    try { await setVoice(await decode(f)); } catch { toast("That audio file couldn't be opened. Try an MP3 or WAV."); return; }
     await put(key("voice"), f); vs.voiceSrc = "your recording"; vs.timing = null; save();
     vlog(`You added your own voice recording (${fmt(voiceBuf.duration * 1000)})`);
     await computeTiming(); refreshSteps(); await prepPlayer();
@@ -512,7 +522,7 @@ export function setupVideo(ctx) {
           let blob;
           if (/wav|mpeg|mp3|ogg/.test(a.mime)) blob = new Blob([fromB64(a.data)], { type: a.mime });
           else blob = pcmToWav(fromB64(a.data), parseInt((a.mime.match(/rate=(\d+)/) || [])[1] || "24000", 10));
-          voiceBuf = await decode(blob);
+          await setVoice(await decode(blob));
           await put(key("voice"), blob);
           vs.voiceSrc = `${vs.voice} · ${m}`; vs.voiceV = 2; vs.timing = null; save();
           vlog(`Voice done: ${fmt(voiceBuf.duration * 1000)} long (${(blob.size / 1e6).toFixed(1)} MB)`);
@@ -546,6 +556,44 @@ export function setupVideo(ctx) {
   let actx = null;
   const audioCtx = () => actx ||= new AudioContext();
   async function decode(blob) { return audioCtx().decodeAudioData(await blob.arrayBuffer()); }
+  // speed + pitch are applied to the original recording, so they can be changed any time without re-recording
+  const fxKey = () => `${vs.speed ?? 1}|${vs.pitch ?? 0}`;
+  function applyVoiceFx() {
+    if (!rawVoice) { voiceBuf = null; return; }
+    const sp = Number(vs.speed ?? 1), pi = Number(vs.pitch ?? 0);
+    if (Math.abs(sp - 1) < 0.001 && Math.abs(pi) < 0.001) { voiceBuf = rawVoice; return; }
+    let ch = rawVoice.getChannelData(0);
+    if (rawVoice.numberOfChannels > 1) { const r = rawVoice.getChannelData(1); ch = ch.map((x, i) => (x + r[i]) / 2); }
+    const out = changeVoice(ch, rawVoice.sampleRate, sp, pi);
+    const b = audioCtx().createBuffer(1, out.length, rawVoice.sampleRate); b.copyToChannel(out, 0);
+    voiceBuf = b;
+  }
+  async function setVoice(buf) { rawVoice = buf; applyVoiceFx(); }
+  function fxLabels() {
+    $("#vSpeedV").textContent = `${Number(vs.speed ?? 1).toFixed(2)}x`;
+    const p = Number(vs.pitch ?? 0); $("#vPitchV").textContent = p === 0 ? "normal" : `${p > 0 ? "+" : ""}${p} (${p > 0 ? "lighter" : "deeper"})`;
+  }
+  let hearNode = null;
+  $("#vHear").onclick = () => {
+    if (hearNode) { try { hearNode.stop(); } catch {} hearNode = null; $("#vHear").textContent = "▶ Hear the voice"; return; }
+    if (!voiceBuf) return;
+    stopPlay(); const ac = audioCtx(); ac.resume();
+    hearNode = ac.createBufferSource(); hearNode.buffer = voiceBuf; hearNode.connect(ac.destination);
+    hearNode.start(0, 0, Math.min(8, voiceBuf.duration)); $("#vHear").textContent = "■ Stop";
+    hearNode.onended = () => { hearNode = null; $("#vHear").textContent = "▶ Hear the voice"; };
+  };
+  for (const id of ["vSpeed", "vPitch"]) {
+    $("#" + id).oninput = () => { vs[id === "vSpeed" ? "speed" : "pitch"] = Number($("#" + id).value); fxLabels(); };
+    $("#" + id).onchange = async () => {
+      const prop = id === "vSpeed" ? "speed" : "pitch";
+      vs[prop] = Number($("#" + id).value); save(); LS.set("videoDefaults", { ...LS.get("videoDefaults", {}), [prop]: vs[prop] });
+      if (!rawVoice || run) return;
+      stopPlay(); applyVoiceFx();
+      vlog(`Voice set to ${Number(vs.speed).toFixed(2)}x speed, pitch ${vs.pitch > 0 ? "+" : ""}${vs.pitch}: ${fmt(voiceBuf.duration * 1000)} long`);
+      await computeTiming(); refreshSteps(); await prepPlayer();
+      toast("Voice updated and captions re-synced.");
+    };
+  }
 
   // ---------- AI pictures
   class BillingError extends Error {}
@@ -723,7 +771,7 @@ export function setupVideo(ctx) {
     if (voiceBuf.numberOfChannels > 1) { const r = voiceBuf.getChannelData(1); ch = ch.map((x, i) => (x + r[i]) / 2); }
     const A = alignVoice(ch, voiceBuf.sampleRate, cur.scenes);
     if (!A) throw new Error("This script has no voiceover lines to line up.");
-    vs.timing = { scenes: A.scenes, endStart: A.endStart, total: A.total };
+    vs.timing = { scenes: A.scenes, endStart: A.endStart, total: A.total, fx: fxKey() };
     save();
     vlog(`Timing: ${A.scenes.length} scenes, ${A.pauses} pauses in the voice, ${A.matched} of ${A.boundaries} sentence breaks matched, video ${fmt(A.total * 1000)}`);
     vstep("timing", "done", `${fmt(A.total * 1000)} total, captions matched to the voice`);
@@ -1160,7 +1208,7 @@ export function setupVideo(ctx) {
 
   // redo buttons
   $("#vSteps").insertAdjacentHTML("afterend", `<div class="vredo"><button class="btn small ghost" id="vRedoVoice">↻ Redo voice</button><button class="btn small ghost" id="vRedoPlan">↻ Redo plan / 3D direction</button></div>`);
-  $("#vRedoVoice").onclick = async () => { if (run) return; await del(key("voice")); voiceBuf = null; vs.voiceSrc = null; vs.timing = null; save(); refreshSteps(); await prepPlayer(); runJob(async () => { await makeVoice(); await computeTiming(); await prepPlayer(); refreshSteps(); }); };
+  $("#vRedoVoice").onclick = async () => { if (run) return; await del(key("voice")); voiceBuf = null; rawVoice = null; vs.voiceSrc = null; vs.timing = null; save(); refreshSteps(); await prepPlayer(); runJob(async () => { await makeVoice(); await computeTiming(); await prepPlayer(); refreshSteps(); }); };
   $("#vRedoPlan").onclick = () => { if (run) return; vs.plan = null; vs.direction = null; save(); refreshSteps(); toast("The plan / 3D direction will be redone next time you press Make the video."); };
 
   $("#vBack").onclick = () => { stop(); openScript(cur.id); };

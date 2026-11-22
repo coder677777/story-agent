@@ -206,6 +206,8 @@ select.text option { background: var(--panel); color: var(--text); }
 .vredo { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .steps li.skip { opacity: .45; }
 .seg.wrap { flex-wrap: wrap; border-radius: 16px; }
+.vrange { width: 100%; accent-color: var(--hl); }
+.label b { color: var(--hl); font-weight: 700; margin-left: 4px; }
 .steps li.skip .ic { border-style: dashed; }
 .vtiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-top: 14px; }
 .vtile { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
@@ -437,6 +439,6 @@ select.text option { background: var(--panel); color: var(--text); }
 </div>
 
 <script type="importmap">{ "imports": { "three": "./lib/three/three.module.js", "three/addons/": "./lib/three/addons/" } }</script>
-<script type="module" src="app.js?v=1.6"></script>
+<script type="module" src="app.js?v=1.7"></script>
 </body>
 </html>
